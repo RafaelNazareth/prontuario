@@ -22,7 +22,7 @@
 
 <br />
 
-[![Repositório](https://img.shields.io/badge/📁_Ver_Repositório-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/RafaelNazareth/prontuario)
+[![Repositório](https://img.shields.io/badge/📁_Ver_Projeto-181717?style=for-the-badge&logo=github&logoColor=white)](https://rafaelnazareth.github.io/prontuario/))
 
 </div>
 
