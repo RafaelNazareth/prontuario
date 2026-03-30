@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PEP — Prontuário Eletrônico | FCMSCSP</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="assets/css/styles.css" />
+  </head>
+  <body>
+    <!-- ========== LOGIN ========== -->
+    <div id="login-page">
+      <div class="login-left">
+        <div class="login-logo-wrap">
+          <img
+            src="https://fcmsantacasasp.edu.br/vemprasanta/wp-content/themes/fcm-new/assets/imgs/logo.png"
+            alt="Santa Casa SP"
+            class="login-logo-img"
+            onerror="
+              this.style.display = 'none';
+              this.nextElementSibling.style.display = 'flex';
+            "
+          />
+          <div class="login-logo-fallback">
+            <div class="login-logo-icon">
+              <i class="bi bi-plus-circle-fill"></i>
+            </div>
+            <div class="login-logo-text">
+              FCMSCSP
+              <small
+                >Faculdade de Ciências Médicas da Santa Casa de São Paulo</small
+              >
+            </div>
+          </div>
+        </div>
+        <div class="login-body">
+          <div class="login-eyebrow">
+            <i class="bi bi-hospital-fill"></i> Serviço-Escola · Psicologia
+          </div>
+          <h1 class="login-headline">
+            Cuidar começa<br /><em>com escuta.</em>
+          </h1>
+          <p class="login-desc">
+            Sistema de prontuário eletrônico do Serviço-Escola do Curso de
+            Psicologia — Faculdade de Ciências Médicas da Santa Casa de São
+            Paulo.
+          </p>
+        </div>
+        <div class="login-footer">
+          <span>FCMSCSP © 2026</span>
+          <span>PEP v1.0 MVP</span>
+        </div>
+      </div>
+      <div class="login-right">
+        <div class="login-card">
+          <div class="login-card-badge">
+            <i class="bi bi-shield-lock-fill"></i> Acesso institucional restrito
+          </div>
+          <h2 class="login-title">Bem-vindo!</h2>
+          <p class="login-subtitle">
+            Insira suas credenciais para acessar o sistema de prontuário.
+          </p>
+          <div class="login-input-group">
+            <label class="login-label">Usuário</label>
+            <div class="login-input-wrap">
+              <i class="bi bi-person ico"></i>
+              <input
+                type="text"
+                id="login-user"
+                placeholder="Digite seu login"
+                autocomplete="off"
+              />
+            </div>
+          </div>
+          <div class="login-input-group">
+            <label class="login-label">Senha</label>
+            <div class="login-input-wrap">
+              <i class="bi bi-lock ico"></i>
+              <input
+                type="password"
+                id="login-pass"
+                placeholder="Digite sua senha"
+              />
+              <i
+                class="bi bi-eye toggle-pw"
+                id="toggle-pw-icon"
+                onclick="togglePw()"
+              ></i>
+            </div>
+          </div>
+          <div class="login-options">
+            <label class="login-check"
+              ><input type="checkbox" id="remember-me" />
+              <span>Lembrar acesso</span></label
+            >
+            <a href="#" class="login-forgot">Esqueci a senha</a>
+          </div>
+          <button class="btn-login" onclick="doLogin()">
+            <i class="bi bi-box-arrow-in-right"></i><span>Entrar</span>
+          </button>
+          <div class="login-error" id="login-error">
+            <i class="bi bi-exclamation-circle"></i> Usuário ou senha
+            incorretos.
+          </div>
+          <hr class="login-divider" />
+          <div class="login-hint-box">
+            <div class="login-hint-title">
+              Logins de teste (clique para preencher)
+            </div>
+            <div class="login-hint-row">
+              <span>Psicólogo Técnico</span
+              ><code onclick="fillLogin('tecnico', '1234')"
+                >tecnico / 1234</code
+              >
+            </div>
+            <div class="login-hint-row">
+              <span>Supervisor</span
+              ><code onclick="fillLogin('supervisor', '1234')"
+                >supervisor / 1234</code
+              >
+            </div>
+            <div class="login-hint-row">
+              <span>Estudante</span
+              ><code onclick="fillLogin('estudante', '1234')"
+                >estudante / 1234</code
+              >
+            </div>
+            <div class="login-hint-row">
+              <span>Paciente</span
+              ><code onclick="fillLogin('paciente', '1234')"
+                >paciente / 1234</code
+              >
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== APP ========== -->
+    <div id="app" class="hidden">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-stripe"></div>
+        <div class="sidebar-logo">
+          <img
+            src="https://fcmsantacasasp.edu.br/vemprasanta/wp-content/themes/fcm-new/assets/imgs/logo.png"
+            alt="FCMSCSP"
+            class="sidebar-logo-img"
+            onerror="
+              this.style.display = 'none';
+              this.nextElementSibling.style.display = 'flex';
+            "
+          />
+          <div class="sidebar-logo-fallback">
+            <div class="sidebar-logo-icon">
+              <i class="bi bi-plus-circle-fill"></i>
+            </div>
+            <div class="sidebar-logo-text">
+              FCMSCSP <small>Serviço-Escola · Psicologia</small>
+            </div>
+          </div>
+        </div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+        <div class="sidebar-footer">
+          <div class="sidebar-user">
+            <div class="sidebar-avatar" id="sb-avatar">T</div>
+            <div class="sidebar-user-info">
+              <div class="sidebar-user-name" id="sb-name">Usuário</div>
+              <div class="sidebar-user-role" id="sb-role">Papel</div>
+            </div>
+            <i
+              class="bi bi-box-arrow-right sidebar-logout"
+              onclick="doLogout()"
+              title="Sair"
+            ></i>
+          </div>
+        </div>
+      </aside>
+
+      <div class="main-wrap">
+        <div class="topbar">
+          <div class="topbar-title" id="topbar-title">Dashboard</div>
+          <div class="topbar-search">
+            <div class="topbar-search-wrap">
+              <i class="bi bi-search"></i>
+              <input
+                type="text"
+                placeholder="Buscar paciente ou caso..."
+                id="global-search"
+                oninput="globalSearch(this.value)"
+              />
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <div class="topbar-icon-btn" title="Notificações">
+              <i class="bi bi-bell"></i><span class="notif-dot"></span>
+            </div>
+            <div class="topbar-icon-btn" title="Ajuda">
+              <i class="bi bi-question-circle"></i>
+            </div>
+          </div>
+        </div>
+        <div class="page-content" id="page-content"></div>
+      </div>
+    </div>
+
+    <!-- MODAL GLOBAL -->
+    <div
+      class="modal-overlay hidden"
+      id="modal-overlay"
+      onclick="closeModal(event)"
+    >
+      <div class="modal" id="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="modal-title" id="modal-title">Modal</div>
+          <button class="modal-close" onclick="closeModal()">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer" id="modal-footer"></div>
+      </div>
+    </div>
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="assets/js/app.js"></script>
+  </body>
+</html>
