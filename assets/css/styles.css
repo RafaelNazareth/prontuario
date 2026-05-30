@@ -228,8 +228,8 @@ textarea.form-control {
 /* ============================================================  LAYOUT MOBILE FIRST  */
 .stats-grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
   margin-bottom: 22px;
 }
 .dash-grid {
@@ -1005,7 +1005,7 @@ textarea.form-control {
   background: var(--surface);
   border-radius: 12px;
   width: 100%;
-  max-width: 560px;
+  max-width: 760px;
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
@@ -1016,6 +1016,42 @@ textarea.form-control {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: var(--text3);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.modal-close:hover {
+  background: var(--sc-green-pale);
+  color: var(--sc-green-dark);
+}
+.modal-body {
+  padding: 20px 22px;
+}
+.modal-footer {
+  padding: 14px 22px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
 }
 .toast-container {
   position: fixed;
@@ -1842,23 +1878,98 @@ textarea.form-control {
   text-decoration-color: var(--sc-green-mid);
 }
 
-/* Layouts de linha do dashboard */
-.dash-row-2 {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-}
+/* Layouts de linha do dashboard — mobile first (coluna) */
+.dash-row-2,
 .dash-row-3 {
   display: flex;
+  flex-direction: column;
   gap: 16px;
-  flex-wrap: wrap;
+}
+/* No desktop, passa para linha */
+@media (min-width: 760px) {
+  .dash-row-2,
+  .dash-row-3 {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .dash-row-2 > .card,
+  .dash-row-3 > .card {
+    min-width: 260px;
+  }
 }
 
-@media (min-width: 1000px) {
-  .dash-row-2 > .card {
-    min-width: 280px;
+/* ============================================================  MOBILE DASHBOARD FIXES  */
+@media (max-width: 759px) {
+  /* Welcome bar — empilha verticalmente */
+  .dash-welcome-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 16px;
+    gap: 12px;
   }
-  .dash-row-3 > .card {
-    min-width: 280px;
+  .dash-health-pill,
+  .dash-proxima-pill {
+    width: 100%;
+  }
+
+  /* KPI cards — fonte menor no mobile */
+  .dash-kpi-value {
+    font-size: 22px;
+  }
+  .dash-kpi-icon {
+    width: 30px;
+    height: 30px;
+    font-size: 13px;
+  }
+
+  /* Tabelas do dashboard — scroll horizontal */
+  .dash-row-2 .table-responsive,
+  .dash-row-3 .table-responsive,
+  .card .table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Página geral */
+  .page-content {
+    padding: 12px;
+  }
+
+  /* Cards sem margem lateral desnecessária */
+  .card {
+    margin-bottom: 12px;
+  }
+
+  /* dash-kpi-card — menos padding */
+  .dash-kpi-card {
+    padding: 12px 14px;
+  }
+
+  /* Oculta colunas secundárias nas tabelas do dashboard no mobile */
+  .dash-row-2 table th:nth-child(4),
+  .dash-row-2 table td:nth-child(4),
+  .dash-row-3 table th:nth-child(4),
+  .dash-row-3 table td:nth-child(4) {
+    display: none;
+  }
+
+  /* Modal — usa tela inteira no mobile */
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    border-radius: 16px 16px 0 0;
+    max-height: 92vh;
+  }
+
+  /* Anamnese grid — sempre 1 coluna no mobile */
+  .anamnese-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .form-row-2,
+  .form-row-3 {
+    grid-template-columns: 1fr !important;
   }
 }

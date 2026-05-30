@@ -493,6 +493,19 @@ function doLogout() {
   document.getElementById("app").classList.add("hidden");
   document.getElementById("login-page").classList.remove("hidden");
   clearTimeout(tempoInativo);
+  // Resetar botão e campos de login para evitar estado travado ao trocar usuário
+  const btn = document.querySelector(".btn-login");
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML =
+      '<i class="bi bi-box-arrow-in-right"></i><span>Entrar</span>';
+  }
+  const userInput = document.getElementById("login-user");
+  const passInput = document.getElementById("login-pass");
+  if (userInput) userInput.value = "";
+  if (passInput) passInput.value = "";
+  const err = document.getElementById("login-error");
+  if (err) err.style.display = "none";
 }
 
 /* ============================================================  APP INIT E NAVEGAÇÃO  */
