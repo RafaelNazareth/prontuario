@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Sistema de prontuário eletrônico do Serviço-Escola de Psicologia — FCMSCSP" />
+    <meta name="theme-color" content="#1b5e20" />
     <title>PEP — Prontuário Eletrônico | FCMSCSP</title>
 
     <link
@@ -107,7 +109,7 @@
             >
             <a href="#" class="login-forgot">Esqueci a senha</a>
           </div>
-          <button class="btn-login" onclick="doLogin()">
+          <button type="button" class="btn-login" onclick="doLogin()" aria-label="Entrar no sistema">
             <i class="bi bi-box-arrow-in-right"></i><span>Entrar</span>
           </button>
           <div class="login-error" id="login-error">
@@ -200,7 +202,7 @@
 
       <div class="main-wrap">
         <div class="topbar">
-          <button class="menu-toggle" onclick="toggleMenu()">
+          <button type="button" class="menu-toggle" onclick="toggleMenu()" aria-label="Abrir menu de navegação">
             <i class="bi bi-list"></i>
           </button>
           <div class="topbar-title" id="topbar-title">Dashboard</div>
@@ -216,11 +218,11 @@
             </div>
           </div>
           <div class="topbar-actions">
-            <div class="topbar-icon-btn" title="Notificações">
-              <i class="bi bi-bell"></i><span class="notif-dot"></span>
+            <div class="topbar-icon-btn" title="Notificações" role="button" aria-label="Notificações" tabindex="0">
+              <i class="bi bi-bell" aria-hidden="true"></i><span class="notif-dot"></span>
             </div>
-            <div class="topbar-icon-btn" title="Ajuda">
-              <i class="bi bi-question-circle"></i>
+            <div class="topbar-icon-btn" title="Ajuda" role="button" aria-label="Ajuda" tabindex="0">
+              <i class="bi bi-question-circle" aria-hidden="true"></i>
             </div>
           </div>
         </div>
@@ -236,7 +238,7 @@
       <div class="modal" id="modal-box" onclick="event.stopPropagation()">
         <div class="modal-header">
           <div class="modal-title" id="modal-title">Modal</div>
-          <button class="modal-close" onclick="closeModal()">
+          <button type="button" class="modal-close" onclick="closeModal()" aria-label="Fechar modal">
             <i class="bi bi-x-lg"></i>
           </button>
         </div>
