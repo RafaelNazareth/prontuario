@@ -166,7 +166,7 @@
       ></div>
 
       <aside class="sidebar" id="sidebar">
-        <div class="sidebar-stripe"></div>
+        <!-- Logo institucional -->
         <div class="sidebar-logo">
           <img
             src="https://fcmsantacasasp.edu.br/vemprasanta/wp-content/themes/fcm-new/assets/imgs/logo.png"
@@ -187,23 +187,46 @@
               <i class="bi bi-plus-circle-fill"></i>
             </div>
             <div class="sidebar-logo-text">
-              FCMSCSP <small>Serviço-Escola · Psicologia</small>
+              FCMSCSP<small>Serviço-Escola · Psicologia</small>
             </div>
           </div>
         </div>
+
+        <!-- Contexto do usuário logado (card no topo) -->
+        <div class="sidebar-context" id="sb-context">
+          <div class="sidebar-ctx-avatar" id="sb-avatar">T</div>
+          <div class="sidebar-ctx-info">
+            <div class="sidebar-ctx-name" id="sb-name">Usuário</div>
+            <span class="sidebar-ctx-role" id="sb-role">Papel</span>
+          </div>
+        </div>
+
+        <!-- Navegação gerada por JS -->
         <nav class="sidebar-nav" id="sidebar-nav"></nav>
+
+        <!-- Rodapé -->
         <div class="sidebar-footer">
+          <div class="sidebar-version">
+            <span class="sidebar-version-label"
+              ><i class="bi bi-circle-fill"></i> PEP Sistema</span
+            >
+            <span class="sidebar-version-tag">v1.0 MVP</span>
+          </div>
           <div class="sidebar-user">
-            <div class="sidebar-avatar" id="sb-avatar">T</div>
+            <div class="sidebar-avatar" id="sb-avatar-footer">T</div>
             <div class="sidebar-user-info">
-              <div class="sidebar-user-name" id="sb-name">Usuário</div>
-              <div class="sidebar-user-role" id="sb-role">Papel</div>
+              <div class="sidebar-user-name" id="sb-name-footer">Usuário</div>
+              <div class="sidebar-user-role">FCMSCSP · 2026</div>
             </div>
-            <i
-              class="bi bi-box-arrow-right sidebar-logout"
+            <div
+              class="sidebar-logout"
               onclick="doLogout()"
-              title="Sair"
-            ></i>
+              title="Sair do sistema"
+              role="button"
+              aria-label="Sair do sistema"
+            >
+              <i class="bi bi-box-arrow-right"></i>
+            </div>
           </div>
         </div>
       </aside>

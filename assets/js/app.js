@@ -511,17 +511,53 @@ function doLogout() {
 /* ============================================================  APP INIT E NAVEGAÇÃO  */
 function initApp(restorePage) {
   const u = currentUser;
-  const sb = document.getElementById("sb-avatar");
-  sb.textContent = u.avatar;
-  sb.style.background = u.color;
-  document.getElementById("sb-name").textContent = u.nome;
-  const RL = {
+  const ROLE_LABELS = {
     tecnico: "Psicólogo Técnico",
     supervisor: "Supervisor",
     estudante: "Estudante",
     paciente: "Paciente",
   };
-  document.getElementById("sb-role").textContent = RL[u.papel];
+  const ROLE_CSS = {
+    tecnico: "ctx-role-tecnico",
+    supervisor: "ctx-role-supervisor",
+    estudante: "ctx-role-estudante",
+    paciente: "ctx-role-paciente",
+  };
+  const ROLE_ICONS = {
+    tecnico: "bi-person-badge-fill",
+    supervisor: "bi-mortarboard-fill",
+    estudante: "bi-book-fill",
+    paciente: "bi-heart-pulse-fill",
+  };
+
+  // Context card (topo da sidebar)
+  const ctxAvatar = document.getElementById("sb-avatar");
+  if (ctxAvatar) {
+    ctxAvatar.textContent = u.avatar;
+    ctxAvatar.style.background = u.color;
+  }
+  const sbName = document.getElementById("sb-name");
+  if (sbName)
+    sbName.textContent =
+      u.nome.split(" ")[0] + " " + (u.nome.split(" ")[1] || "");
+  const sbRole = document.getElementById("sb-role");
+  if (sbRole) {
+    sbRole.textContent = ROLE_LABELS[u.papel];
+    sbRole.className = "sidebar-ctx-role " + (ROLE_CSS[u.papel] || "");
+    const ic = document.createElement("i");
+    ic.className = "bi " + (ROLE_ICONS[u.papel] || "bi-person");
+    sbRole.prepend(ic);
+  }
+
+  // Footer avatar + nome
+  const footerAvatar = document.getElementById("sb-avatar-footer");
+  if (footerAvatar) {
+    footerAvatar.textContent = u.avatar;
+    footerAvatar.style.background = u.color;
+  }
+  const footerName = document.getElementById("sb-name-footer");
+  if (footerName) footerName.textContent = u.nome;
+
   buildSidebar();
   navigate(
     restorePage || (u.papel === "paciente" ? "meu-prontuario" : "dashboard"),
@@ -541,8 +577,14 @@ function buildSidebar() {
       const el = document.createElement("div");
       el.className = "nav-item";
       el.dataset.page = item.id;
+      el.title = item.label; // tooltip nativo acessível
+      el.setAttribute("role", "button");
+      el.setAttribute("tabindex", "0");
       el.innerHTML = `<i class="bi ${item.icon}"></i><span>${item.label}</span>${item.badge ? `<span class="nav-badge">${item.badge}</span>` : ""}`;
       el.onclick = () => navigate(item.id);
+      el.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") navigate(item.id);
+      };
       nav.appendChild(el);
     }
   });
