@@ -1,7 +1,6 @@
 /* ============================================================  PERSISTÊNCIA E SEGURANÇA  */
-const STORAGE_KEY = "pep_fcmscsp_data_v9"; // Atualizado para nova versão
+const STORAGE_KEY = "pep_fcmscsp_data_v11"; // Atualizado para nova regra de acesso rigorosa
 
-// Funções para ofuscar e desofuscar os dados do localStorage (Base64)
 function encriptar(dados) {
   return btoa(encodeURIComponent(JSON.stringify(dados)));
 }
@@ -275,7 +274,7 @@ function mockData() {
         tipo: "pdf",
         tamanho: "124 KB",
         data: "2026-05-10",
-        autor: "Dr. Carlos",
+        autor: "Dr. Carlos Mendes",
       },
     ],
   };
@@ -340,6 +339,24 @@ function logAudit(tipo, acao, obj) {
   saveData();
 }
 
+/* ============================================================  MOTOR DE PERMISSÕES DA LGPD  */
+// Esta é a função central que dita quem pode ver o quê, baseada no papel de quem fez o login.
+function getPacientesPermitidos() {
+  if (!currentUser) return [];
+  if (currentUser.papel === "tecnico") {
+    return PACIENTES; // Técnico vê todos os pacientes da clínica
+  } else if (currentUser.papel === "supervisor") {
+    return PACIENTES.filter((p) => p.supervisorId === currentUser.id); // Supervisor só vê quem supervisiona
+  } else if (currentUser.papel === "estudante") {
+    return PACIENTES.filter(
+      (p) => p.estudantesIds && p.estudantesIds.includes(currentUser.id),
+    ); // Estudante só vê quem atende
+  } else if (currentUser.papel === "paciente") {
+    return PACIENTES.filter((p) => p.id === currentUser.id); // Paciente vê apenas ele mesmo
+  }
+  return [];
+}
+
 /* ============================================================  SESSÃO E MENU MOBILE  */
 let currentUser = null;
 let currentPage = "dashboard";
@@ -363,7 +380,6 @@ function clearSession() {
   sessionStorage.removeItem(SESSION_KEY);
 }
 
-// Toggle Menu Mobile
 function toggleMenu() {
   document.getElementById("sidebar").classList.toggle("open");
   document.getElementById("sidebar-overlay").classList.toggle("open");
@@ -425,6 +441,7 @@ function togglePw() {
       ? "bi bi-eye toggle-pw"
       : "bi bi-eye-slash toggle-pw";
 }
+
 function doLogin() {
   const u = document.getElementById("login-user").value.trim(),
     p = document.getElementById("login-pass").value.trim();
@@ -441,6 +458,7 @@ function doLogin() {
   initApp(startPage);
   resetarTempoInatividade();
 }
+
 document.getElementById("login-pass").addEventListener("keydown", (e) => {
   if (e.key === "Enter") doLogin();
 });
@@ -514,7 +532,6 @@ function navigate(page) {
   };
   document.getElementById("topbar-title").textContent = T[page] || page;
 
-  // Fecha o menu no celular ao navegar
   if (window.innerWidth < 1000) {
     document.getElementById("sidebar").classList.remove("open");
     document.getElementById("sidebar-overlay").classList.remove("open");
@@ -548,6 +565,12 @@ function navigate(page) {
 }
 
 function openProntuario(pid) {
+  const meusPacientesIds = getPacientesPermitidos().map((p) => p.id);
+  if (!meusPacientesIds.includes(pid)) {
+    toast("Acesso negado. Paciente não alocado ao seu utilizador.", "error");
+    return navigate("pacientes");
+  }
+
   const p = PACIENTES.find((x) => x.id === pid);
   if (!p) return navigate("pacientes");
   document.getElementById("topbar-title").textContent =
@@ -563,143 +586,242 @@ function calcIdade(nasc) {
   return new Date().getFullYear() - new Date(nasc).getFullYear();
 }
 
-/* ============================================================  DASHBOARD AVANÇADO  */
+/* ============================================================  DASHBOARD  */
 function renderDashboard() {
   const role = currentUser.papel;
-  const lista =
-    role === "estudante"
-      ? PACIENTES.filter(
-          (p) =>
-            p.estudantesIds &&
-            p.estudantesIds.includes(currentUser.id) &&
-            p.status === "ativo",
-        )
-      : PACIENTES.filter((p) => p.status === "ativo");
-  const proximos = AGENDAMENTOS.filter(
-    (a) => a.data >= new Date().toISOString().split("T")[0],
-  ).slice(0, 5);
-  const totalEvs = Object.values(EVOLUCOES).reduce((s, v) => s + v.length, 0);
+
+  // Utilizar a função central de segurança
+  const meusPacientes = getPacientesPermitidos();
+  const listaAtivos = meusPacientes.filter((p) => p.status === "ativo");
+  const meusPacientesIds = meusPacientes.map((p) => p.id);
+
+  // Só vê agendamentos dos pacientes permitidos
+  const meusAgendamentos = AGENDAMENTOS.filter((a) =>
+    meusPacientesIds.includes(a.pacienteId),
+  );
+  const proximos = meusAgendamentos
+    .filter((a) => a.data >= new Date().toISOString().split("T")[0])
+    .slice(0, 5);
+
+  // Só conta evoluções dos pacientes permitidos
+  let totalEvs = 0;
+  Object.keys(EVOLUCOES).forEach((pid) => {
+    if (meusPacientesIds.includes(parseInt(pid)))
+      totalEvs += EVOLUCOES[pid].length;
+  });
+
   let alertasHtml = "";
-  const anamnesesPendentes = lista.filter(
+  const anamnesesPendentes = listaAtivos.filter(
     (p) => !ANAMNESES[p.id] || ANAMNESES[p.id].status === "rascunho",
   ).length;
   const acessosPendentes = ACESSO_PACIENTE.filter(
     (a) => a.status === "pendente",
   ).length;
+
+  // Alertas
+  if (role === "tecnico" || role === "supervisor") {
+    if (acessosPendentes > 0 && role === "tecnico")
+      alertasHtml += `<div class="alert-item alert-red"><i class="bi bi-shield-lock-fill alert-item-icon"></i><div class="alert-item-text"><strong>Liberação de Prontuário</strong>Há ${acessosPendentes} solicitação(ões) de acesso digital aguardando revisão.</div></div>`;
+    const estudantes = USERS.filter((u) => u.papel === "estudante");
+    const estSemCaso = estudantes.filter(
+      (e) =>
+        !PACIENTES.some(
+          (p) => p.estudantesIds && p.estudantesIds.includes(e.id),
+        ),
+    ).length;
+    if (estSemCaso > 0)
+      alertasHtml += `<div class="alert-item alert-amber"><i class="bi bi-person-exclamation alert-item-icon"></i><div class="alert-item-text"><strong>Ociosidade</strong>Há ${estSemCaso} estudante(s) sem nenhum caso alocado. Realoque pacientes.</div></div>`;
+  }
   if (anamnesesPendentes > 0)
-    alertasHtml += `<div class="alert-item alert-amber"><i class="bi bi-exclamation-triangle-fill alert-item-icon"></i><div class="alert-item-text"><strong>Anamneses Incompletas</strong>Há ${anamnesesPendentes} paciente(s) ativos sem anamnese finalizada.</div></div>`;
-  if (role === "tecnico" && acessosPendentes > 0)
-    alertasHtml += `<div class="alert-item alert-red"><i class="bi bi-shield-lock-fill alert-item-icon"></i><div class="alert-item-text"><strong>Liberação de Prontuário</strong>Há ${acessosPendentes} solicitação(ões) de acesso.</div></div>`;
+    alertasHtml += `<div class="alert-item alert-amber"><i class="bi bi-exclamation-triangle-fill alert-item-icon"></i><div class="alert-item-text"><strong>Anamneses Incompletas</strong>Há ${anamnesesPendentes} paciente(s) ativos sob sua responsabilidade sem anamnese finalizada.</div></div>`;
   if (alertasHtml === "")
     alertasHtml = `<div class="empty-state" style="padding:10px"><i class="bi bi-check-circle" style="color:var(--sc-green);font-size:24px"></i><p style="margin-top:10px">Tudo em dia!</p></div>`;
 
-  return `
-  <div class="stats-grid">
-    <div class="stat-card"><div class="stat-icon stat-icon-green"><i class="bi bi-people-fill"></i></div><div><div class="stat-value">${lista.length}</div><div class="stat-label">Pacientes ativos</div></div></div>
-    <div class="stat-card"><div class="stat-icon stat-icon-green2"><i class="bi bi-calendar-check-fill"></i></div><div><div class="stat-value">${AGENDAMENTOS.length}</div><div class="stat-label">Agendamentos</div></div></div>
-    <div class="stat-card"><div class="stat-icon stat-icon-amber"><i class="bi bi-journal-medical"></i></div><div><div class="stat-value">${totalEvs}</div><div class="stat-label">Evoluções registradas</div></div></div>
-    <div class="stat-card"><div class="stat-icon stat-icon-blue"><i class="bi bi-shield-check-fill"></i></div><div><div class="stat-value">100%</div><div class="stat-label">Integridade de registros</div></div></div>
-  </div>
-  <div class="dashboard-charts">
-    <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-bar-chart-fill" style="color:var(--sc-green)"></i> Tendência de Agendamentos</span></div><div class="card-body"><div class="chart-container"><canvas id="chartTendencia"></canvas></div></div></div>
-    <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-pie-chart-fill" style="color:var(--sc-green)"></i> Evoluções por Tipo</span></div><div class="card-body"><div class="chart-container"><canvas id="chartEvolucoes"></canvas></div></div></div>
-  </div>
-  <div class="dash-grid">
-    <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-calendar3" style="color:var(--sc-green)"></i>Próximos Atendimentos</span>${role === "tecnico" ? `<button class="btn btn-primary btn-sm" onclick="openModalNovoAgendamento()"><i class="bi bi-plus"></i> Novo</button>` : ""}</div><div class="card-body" style="padding:12px"><div class="agenda-list">${
-      proximos.length > 0
-        ? proximos
-            .map((ag) => {
-              const pac = PACIENTES.find((p) => p.id === ag.pacienteId),
-                est = USERS.find((u) => u.id === ag.estudanteId);
-              return `<div class="agenda-item" onclick="openProntuario(${ag.pacienteId})"><div class="agenda-time">${ag.hora}</div><div class="agenda-dot" style="background:${pac.cor}"></div><div style="flex:1;min-width:0"><div class="agenda-patient">${escapeHTML(pac.nome)}</div><div class="agenda-meta">${ag.data} · ${escapeHTML(ag.local)} · ${est ? escapeHTML(est.nome) : ""}</div></div><span class="badge ${ag.status === "confirmado" ? "badge-green" : "badge-amber"}">${ag.status}</span></div>`;
-            })
-            .join("")
-        : '<div class="empty-state" style="padding:20px"><p style="font-size:13px;color:var(--text3)">Nenhum agendamento</p></div>'
-    }</div></div></div>
-    <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-bell-fill" style="color:var(--amber)"></i>Avisos e Pendências</span></div><div class="card-body" style="padding:16px"><div class="alerts-list">${alertasHtml}</div></div></div>
-  </div>`;
+  if (role === "tecnico" || role === "supervisor") {
+    return `
+    <div class="page-header" style="margin-bottom:20px"><div class="page-header-left"><h1>Visão Gerencial</h1><p>Métricas de capacidade e status dos seus casos</p></div></div>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-icon stat-icon-green"><i class="bi bi-people-fill"></i></div><div><div class="stat-value">${listaAtivos.length}</div><div class="stat-label">Pacientes Ativos</div></div></div>
+      <div class="stat-card"><div class="stat-icon stat-icon-blue"><i class="bi bi-person-video3"></i></div><div><div class="stat-value">${USERS.filter((u) => u.papel === "estudante").length}</div><div class="stat-label">Estudantes no Sistema</div></div></div>
+      <div class="stat-card"><div class="stat-icon stat-icon-amber"><i class="bi bi-journal-medical"></i></div><div><div class="stat-value">${totalEvs}</div><div class="stat-label">Evoluções Registadas</div></div></div>
+      <div class="stat-card"><div class="stat-icon stat-icon-green2"><i class="bi bi-calendar-check-fill"></i></div><div><div class="stat-value">${meusAgendamentos.length}</div><div class="stat-label">Agendamentos</div></div></div>
+    </div>
+    <div class="dashboard-charts">
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-bar-chart-fill" style="color:var(--sc-green)"></i> Carga por Estudante</span></div><div class="card-body"><div class="chart-container"><canvas id="chartCasosEstudante"></canvas></div></div></div>
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-pie-chart-fill" style="color:var(--sc-green)"></i> Evoluções Clínicas</span></div><div class="card-body"><div class="chart-container"><canvas id="chartEvolucoes"></canvas></div></div></div>
+    </div>
+    <div class="dash-grid">
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-calendar3" style="color:var(--sc-green)"></i>Próximos Atendimentos</span>${role === "tecnico" ? `<button class="btn btn-primary btn-sm" onclick="openModalNovoAgendamento()"><i class="bi bi-plus"></i> Novo</button>` : ""}</div><div class="card-body" style="padding:12px"><div class="agenda-list">${
+        proximos.length > 0
+          ? proximos
+              .map((ag) => {
+                const pac = PACIENTES.find((p) => p.id === ag.pacienteId),
+                  est = USERS.find((u) => u.id === ag.estudanteId);
+                return `<div class="agenda-item" onclick="openProntuario(${ag.pacienteId})"><div class="agenda-time">${ag.hora}</div><div class="agenda-dot" style="background:${pac.cor}"></div><div style="flex:1;min-width:0"><div class="agenda-patient">${escapeHTML(pac.nome)}</div><div class="agenda-meta">${ag.data} · ${escapeHTML(ag.local)} · ${est ? escapeHTML(est.nome) : ""}</div></div><span class="badge ${ag.status === "confirmado" ? "badge-green" : "badge-amber"}">${ag.status}</span></div>`;
+              })
+              .join("")
+          : '<div class="empty-state" style="padding:20px"><p style="font-size:13px;color:var(--text3)">Nenhum agendamento futuro</p></div>'
+      }</div></div></div>
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-bell-fill" style="color:var(--amber)"></i>Avisos Gerenciais</span></div><div class="card-body" style="padding:16px"><div class="alerts-list">${alertasHtml}</div></div></div>
+    </div>`;
+  } else {
+    return `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-icon stat-icon-green"><i class="bi bi-people-fill"></i></div><div><div class="stat-value">${listaAtivos.length}</div><div class="stat-label">Meus Casos</div></div></div>
+      <div class="stat-card"><div class="stat-icon stat-icon-green2"><i class="bi bi-calendar-check-fill"></i></div><div><div class="stat-value">${meusAgendamentos.length}</div><div class="stat-label">Meus Agendamentos</div></div></div>
+      <div class="stat-card"><div class="stat-icon stat-icon-amber"><i class="bi bi-journal-medical"></i></div><div><div class="stat-value">${totalEvs}</div><div class="stat-label">Minhas Evoluções</div></div></div>
+      <div class="stat-card"><div class="stat-icon stat-icon-blue"><i class="bi bi-shield-check-fill"></i></div><div><div class="stat-value">100%</div><div class="stat-label">Integridade Registros</div></div></div>
+    </div>
+    <div class="dashboard-charts">
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-bar-chart-fill" style="color:var(--sc-green)"></i> Tendência de Agendamentos</span></div><div class="card-body"><div class="chart-container"><canvas id="chartTendencia"></canvas></div></div></div>
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-pie-chart-fill" style="color:var(--sc-green)"></i> Evoluções por Tipo</span></div><div class="card-body"><div class="chart-container"><canvas id="chartEvolucoes"></canvas></div></div></div>
+    </div>
+    <div class="dash-grid">
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-calendar3" style="color:var(--sc-green)"></i>Próximos Atendimentos</span></div><div class="card-body" style="padding:12px"><div class="agenda-list">${
+        proximos.length > 0
+          ? proximos
+              .map((ag) => {
+                const pac = PACIENTES.find((p) => p.id === ag.pacienteId),
+                  est = USERS.find((u) => u.id === ag.estudanteId);
+                return `<div class="agenda-item" onclick="openProntuario(${ag.pacienteId})"><div class="agenda-time">${ag.hora}</div><div class="agenda-dot" style="background:${pac.cor}"></div><div style="flex:1;min-width:0"><div class="agenda-patient">${escapeHTML(pac.nome)}</div><div class="agenda-meta">${ag.data} · ${escapeHTML(ag.local)} · ${est ? escapeHTML(est.nome) : ""}</div></div><span class="badge ${ag.status === "confirmado" ? "badge-green" : "badge-amber"}">${ag.status}</span></div>`;
+              })
+              .join("")
+          : '<div class="empty-state" style="padding:20px"><p style="font-size:13px;color:var(--text3)">Nenhum agendamento futuro</p></div>'
+      }</div></div></div>
+      <div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-bell-fill" style="color:var(--amber)"></i>Avisos e Pendências</span></div><div class="card-body" style="padding:16px"><div class="alerts-list">${alertasHtml}</div></div></div>
+    </div>`;
+  }
 }
 
 let chartTendenciaInst = null;
 let chartEvolucoesInst = null;
+let chartCasosEstudanteInst = null;
 function renderDashboardCharts() {
-  const ctxTendencia = document.getElementById("chartTendencia");
+  const role = currentUser.papel;
+  const meusPacientesIds = getPacientesPermitidos().map((p) => p.id);
+
   const ctxEvolucoes = document.getElementById("chartEvolucoes");
-  if (!ctxTendencia || !ctxEvolucoes) return;
-  if (chartTendenciaInst) chartTendenciaInst.destroy();
-  if (chartEvolucoesInst) chartEvolucoesInst.destroy();
-  chartTendenciaInst = new Chart(ctxTendencia, {
-    type: "line",
-    data: {
-      labels: ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul"],
-      datasets: [
-        {
-          label: "Agendamentos",
-          data: [12, 19, 15, 25, 22, 30, AGENDAMENTOS.length],
-          borderColor: "#2e7d32",
-          backgroundColor: "rgba(46, 125, 50, 0.1)",
-          borderWidth: 2,
-          fill: true,
-          tension: 0.4,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        y: { beginAtZero: true, grid: { borderDash: [4, 4] } },
-        x: { grid: { display: false } },
+  if (ctxEvolucoes) {
+    if (chartEvolucoesInst) chartEvolucoesInst.destroy();
+    let cat = 0;
+    let csup = 0;
+    Object.keys(EVOLUCOES).forEach((pid) => {
+      if (meusPacientesIds.includes(parseInt(pid))) {
+        EVOLUCOES[pid].forEach((e) => {
+          if (role === "estudante" && e.autor !== currentUser.nome) return;
+          if (e.tipo === "atendimento") cat++;
+          else csup++;
+        });
+      }
+    });
+    if (cat === 0 && csup === 0) cat = 1;
+    chartEvolucoesInst = new Chart(ctxEvolucoes, {
+      type: "doughnut",
+      data: {
+        labels: ["Atendimentos", "Supervisões"],
+        datasets: [
+          {
+            data: [cat, csup],
+            backgroundColor: ["#2e7d32", "#f59e0b"],
+            borderWidth: 0,
+            hoverOffset: 4,
+          },
+        ],
       },
-    },
-  });
-  let cat = 0;
-  let csup = 0;
-  Object.values(EVOLUCOES).forEach((lista) =>
-    lista.forEach((e) => {
-      if (e.tipo === "atendimento") cat++;
-      else csup++;
-    }),
-  );
-  if (cat === 0 && csup === 0) cat = 1;
-  chartEvolucoesInst = new Chart(ctxEvolucoes, {
-    type: "doughnut",
-    data: {
-      labels: ["Atendimentos", "Supervisões"],
-      datasets: [
-        {
-          data: [cat, csup],
-          backgroundColor: ["#2e7d32", "#f59e0b"],
-          borderWidth: 0,
-          hoverOffset: 4,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: "75%",
-      plugins: {
-        legend: {
-          position: "bottom",
-          labels: { usePointStyle: true, padding: 20, font: { size: 11 } },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "75%",
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: { usePointStyle: true, padding: 20, font: { size: 11 } },
+          },
         },
       },
-    },
-  });
+    });
+  }
+
+  if (role === "tecnico" || role === "supervisor") {
+    const ctxCasos = document.getElementById("chartCasosEstudante");
+    if (ctxCasos) {
+      if (chartCasosEstudanteInst) chartCasosEstudanteInst.destroy();
+      const estudantes = USERS.filter((u) => u.papel === "estudante");
+      const labelsEstudantes = estudantes.map((e) => e.nome.split(" ")[0]);
+      // Conta os casos baseados na permissão de quem visualiza o gráfico
+      const meusPacientes = getPacientesPermitidos();
+      const dataCasos = estudantes.map(
+        (e) =>
+          meusPacientes.filter(
+            (p) => p.estudantesIds && p.estudantesIds.includes(e.id),
+          ).length,
+      );
+
+      chartCasosEstudanteInst = new Chart(ctxCasos, {
+        type: "bar",
+        data: {
+          labels: labelsEstudantes,
+          datasets: [
+            {
+              label: "Casos Alocados",
+              data: dataCasos,
+              backgroundColor: "#388e3c",
+              borderRadius: 4,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+        },
+      });
+    }
+  } else {
+    const ctxTendencia = document.getElementById("chartTendencia");
+    if (ctxTendencia) {
+      if (chartTendenciaInst) chartTendenciaInst.destroy();
+      const meusAgendamentos = AGENDAMENTOS.filter((a) =>
+        meusPacientesIds.includes(a.pacienteId),
+      );
+      chartTendenciaInst = new Chart(ctxTendencia, {
+        type: "line",
+        data: {
+          labels: ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul"],
+          datasets: [
+            {
+              label: "Agendamentos",
+              data: [12, 19, 15, 25, 22, 30, meusAgendamentos.length],
+              borderColor: "#2e7d32",
+              backgroundColor: "rgba(46, 125, 50, 0.1)",
+              borderWidth: 2,
+              fill: true,
+              tension: 0.4,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, grid: { borderDash: [4, 4] } },
+            x: { grid: { display: false } },
+          },
+        },
+      });
+    }
+  }
 }
 
 /* ============================================================  PACIENTES  */
 function renderPacientes() {
   const role = currentUser.papel;
-  const lista =
-    role === "estudante"
-      ? PACIENTES.filter(
-          (p) => p.estudantesIds && p.estudantesIds.includes(currentUser.id),
-        )
-      : PACIENTES;
-  return `<div class="page-header"><div class="page-header-left"><h1>${role === "estudante" ? "Meus Casos" : "Pacientes"}</h1><p>${lista.length} cadastrados</p></div>${role === "tecnico" ? `<button class="btn btn-primary" onclick="openModalNovoPaciente()"><i class="bi bi-person-plus-fill"></i> Novo paciente</button>` : ""}</div>
+  // Agora utiliza a função centralizada que bloqueia quem não tem acesso.
+  const lista = getPacientesPermitidos();
+
+  return `<div class="page-header"><div class="page-header-left"><h1>${role === "estudante" ? "Meus Casos" : "Pacientes"}</h1><p>${lista.length} casos listados</p></div>${role === "tecnico" ? `<button class="btn btn-primary" onclick="openModalNovoPaciente()"><i class="bi bi-person-plus-fill"></i> Novo paciente</button>` : ""}</div>
   <div class="card"><div class="card-header" style="padding:12px 18px"><div class="filter-bar"><div class="search-box"><i class="bi bi-search"></i><input type="text" placeholder="Buscar por nome..." id="pac-search" oninput="filterPacientes(this.value)"></div><select class="filter-select" onchange="filterPacienteStatus(this.value)"><option value="">Todos os status</option><option value="ativo">Ativos</option><option value="inativo">Inativos</option></select></div></div>
   <div class="table-responsive"><table><thead><tr><th>Paciente</th><th>CPF</th><th>Estudantes</th><th>Supervisor</th><th>Status</th><th>Ações</th></tr></thead><tbody id="pac-tbody">${lista.map(renderPacienteRow).join("")}</tbody></table></div></div>`;
 }
@@ -718,26 +840,14 @@ function renderPacienteRow(p) {
 }
 
 function filterPacientes(q) {
-  const role = currentUser.papel;
-  const lista =
-    role === "estudante"
-      ? PACIENTES.filter(
-          (p) => p.estudantesIds && p.estudantesIds.includes(currentUser.id),
-        )
-      : PACIENTES;
+  const lista = getPacientesPermitidos();
   document.getElementById("pac-tbody").innerHTML = lista
     .filter((p) => p.nome.toLowerCase().includes(q.toLowerCase()))
     .map(renderPacienteRow)
     .join("");
 }
 function filterPacienteStatus(s) {
-  const role = currentUser.papel;
-  const lista =
-    role === "estudante"
-      ? PACIENTES.filter(
-          (p) => p.estudantesIds && p.estudantesIds.includes(currentUser.id),
-        )
-      : PACIENTES;
+  const lista = getPacientesPermitidos();
   document.getElementById("pac-tbody").innerHTML = (
     s ? lista.filter((p) => p.status === s) : lista
   )
@@ -846,7 +956,14 @@ function renderAgenda() {
     "2026-06-05": 4,
   };
   const slotMap = {};
-  AGENDAMENTOS.forEach((ag) => {
+
+  // Utiliza a validação central para filtrar a agenda
+  const meusPacientesIds = getPacientesPermitidos().map((p) => p.id);
+  const meusAgendamentos = AGENDAMENTOS.filter((a) =>
+    meusPacientesIds.includes(a.pacienteId),
+  );
+
+  meusAgendamentos.forEach((ag) => {
     const d = dayMap[ag.data];
     if (d !== undefined) {
       const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
@@ -859,6 +976,7 @@ function renderAgenda() {
         };
     }
   });
+
   return `<div class="page-header"><div class="page-header-left"><h1>Agenda</h1><p>Junho e Julho de 2026</p></div>${currentUser.papel === "tecnico" ? `<button class="btn btn-primary" onclick="openModalNovoAgendamento()"><i class="bi bi-plus-lg"></i> Novo agendamento</button>` : ""}</div><div class="card"><div class="table-responsive"><div class="calendar-grid"><div class="cal-header">Hora</div>${DAYS.map((d, i) => `<div class="cal-header">${d}<br><span style="font-size:10px">${DATES[i]}</span></div>`).join("")}${HOURS.map(
     (h) =>
       `<div class="cal-hour-label">${h}</div>${DAYS.map((_, di) => {
@@ -867,12 +985,12 @@ function renderAgenda() {
       }).join("")}`,
   ).join(
     "",
-  )}</div></div></div><div class="card"><div class="card-header"><span class="card-title">Lista Geral</span></div><div class="table-responsive"><table><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Status</th></tr></thead><tbody>${AGENDAMENTOS.map(
-    (ag) => {
+  )}</div></div></div><div class="card"><div class="card-header"><span class="card-title">Sua Lista de Agendamentos</span></div><div class="table-responsive"><table><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Status</th></tr></thead><tbody>${meusAgendamentos
+    .map((ag) => {
       const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
       return `<tr><td>${ag.data}</td><td>${ag.hora}</td><td>${escapeHTML(pac ? pac.nome : "")}</td><td><span class="badge badge-green">${ag.status}</span></td></tr>`;
-    },
-  ).join("")}</tbody></table></div></div>`;
+    })
+    .join("")}</tbody></table></div></div>`;
 }
 
 /* ============================================================  ACESSO & USUÁRIOS  */
@@ -902,6 +1020,12 @@ function renderAcesso() {
     .join(
       "",
     )}</div><div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-table" style="color:var(--sc-green)"></i>Matriz de Permissões</span></div><div class="table-responsive"><table class="perm-table"><thead><tr><th>Funcionalidade</th><th>Técnico</th><th>Supervisor</th><th>Estudante</th></tr></thead><tbody>${[
+    [
+      "Ver Lista de Casos",
+      '<i class="bi bi-check-circle-fill perm-yes"></i> Todos',
+      '<span class="perm-cond">Somente seus</span>',
+      '<span class="perm-cond">Somente seus</span>',
+    ],
     [
       "Cadastrar paciente",
       '<i class="bi bi-check-circle-fill perm-yes"></i>',
@@ -1089,7 +1213,7 @@ function validarCPF(cpf) {
 }
 
 function validarEmail(email) {
-  if (!email) return true; // permite vazio, pois não é obrigatório no seu fluxo
+  if (!email) return true; // permite vazio
   const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return re.test(email);
 }
@@ -1138,17 +1262,7 @@ function confirmarSalvarEvolucao(pid) {
     confirmDiv.style.zIndex = "3000";
     document.body.appendChild(confirmDiv);
   }
-  confirmDiv.innerHTML = `
-    <div class="modal" style="max-width: 400px; text-align: center; padding: 24px;" onclick="event.stopPropagation()">
-      <i class="bi bi-exclamation-triangle-fill" style="font-size: 44px; color: var(--amber); margin-bottom: 12px; display: block;"></i>
-      <h3 style="margin-bottom: 8px; font-size: 18px; color: var(--text);">Tem a certeza?</h3>
-      <p style="font-size: 14px; color: var(--text2); margin-bottom: 24px; line-height: 1.5;">Uma vez salva, esta evolução <strong>não poderá ser alterada ou apagada</strong> devido a normas do CRP.</p>
-      <div style="display: flex; gap: 10px; justify-content: center;">
-        <button class="btn btn-secondary" onclick="document.getElementById('custom-confirm').classList.add('hidden')">Cancelar</button>
-        <button class="btn btn-primary" onclick="executarSalvarEvolucao(${pid})">Sim, confirmar</button>
-      </div>
-    </div>
-  `;
+  confirmDiv.innerHTML = `<div class="modal" style="max-width: 400px; text-align: center; padding: 24px;" onclick="event.stopPropagation()"><i class="bi bi-exclamation-triangle-fill" style="font-size: 44px; color: var(--amber); margin-bottom: 12px; display: block;"></i><h3 style="margin-bottom: 8px; font-size: 18px; color: var(--text);">Tem certeza?</h3><p style="font-size: 14px; color: var(--text2); margin-bottom: 24px; line-height: 1.5;">Uma vez salva, esta evolução <strong>não poderá ser alterada ou apagada</strong> devido a normas do CRP.</p><div style="display: flex; gap: 10px; justify-content: center;"><button class="btn btn-secondary" onclick="document.getElementById('custom-confirm').classList.add('hidden')">Cancelar</button><button class="btn btn-primary" onclick="executarSalvarEvolucao(${pid})">Sim, confirmar</button></div></div>`;
   confirmDiv.classList.remove("hidden");
 }
 
@@ -1268,7 +1382,6 @@ function salvarNovoPaciente() {
   const cpf = document.getElementById("np-cpf").value.trim();
   const email = document.getElementById("np-email").value.trim();
 
-  // Validações Reais
   if (!nome) return showError("np-nome", "Informe o nome completo!");
   if (cpf && !validarCPF(cpf))
     return showError("np-cpf", "O CPF introduzido não é válido!");
@@ -1335,7 +1448,6 @@ function salvarEdicaoPaciente(pid) {
   const cpf = document.getElementById("ep-cpf").value.trim();
   const email = document.getElementById("ep-email").value.trim();
 
-  // Validações Reais
   if (!nome) return showError("ep-nome", "Informe o nome completo!");
   if (cpf && !validarCPF(cpf))
     return showError("ep-cpf", "O CPF introduzido não é válido!");
@@ -1404,12 +1516,14 @@ function salvarNovoUsuario() {
 }
 
 function openModalNovoAgendamento() {
+  const meusPacientes = getPacientesPermitidos();
   openModal(
     `Novo Agendamento`,
-    `<div class="form-group"><label class="form-label">Paciente</label><select id="ag-pac" class="form-control">${PACIENTES.map((p) => `<option value="${p.id}">${escapeHTML(p.nome)}</option>`).join("")}</select></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label">Data</label><input type="date" id="ag-data" class="form-control"></div><div class="form-group"><label class="form-label">Hora</label><input type="time" id="ag-hora" class="form-control"></div></div><div class="form-group"><label class="form-label">Local</label><input type="text" id="ag-local" class="form-control" placeholder="Ex: Sala 02"></div>`,
+    `<div class="form-group"><label class="form-label">Paciente</label><select id="ag-pac" class="form-control">${meusPacientes.map((p) => `<option value="${p.id}">${escapeHTML(p.nome)}</option>`).join("")}</select></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label">Data</label><input type="date" id="ag-data" class="form-control"></div><div class="form-group"><label class="form-label">Hora</label><input type="time" id="ag-hora" class="form-control"></div></div><div class="form-group"><label class="form-label">Local</label><input type="text" id="ag-local" class="form-control" placeholder="Ex: Sala 02"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarAgendamento()">Agendar</button>`,
   );
 }
+
 function salvarAgendamento() {
   AGENDAMENTOS.push({
     id: Date.now(),
@@ -1438,11 +1552,13 @@ function salvarAgendamento() {
 /* ============================================================  TOAST E BUSCA GLOBAL  */
 function globalSearch(q) {
   if (!q || q.length < 2) return;
-  const found = PACIENTES.filter((p) =>
+  const meusPacientes = getPacientesPermitidos();
+  const found = meusPacientes.filter((p) =>
     p.nome.toLowerCase().includes(q.toLowerCase()),
   );
   if (found.length === 1) openProntuario(found[0].id);
 }
+
 function toast(msg, type = "info") {
   const t = document.createElement("div");
   t.className = `toast toast-${type}`;

@@ -226,7 +226,6 @@ textarea.form-control {
 }
 
 /* ============================================================  LAYOUT MOBILE FIRST  */
-/* Grids Base (Mobile: 1 coluna) */
 .stats-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -309,7 +308,7 @@ textarea.form-control {
   display: block;
 }
 
-/* Menu Lateral e Overlay (Mobile por Padrão) */
+/* Menu Lateral e Overlay */
 .sidebar {
   width: var(--sidebar-w);
   min-height: 100vh;
@@ -403,8 +402,6 @@ textarea.form-control {
 }
 
 /* ============================================================  MEDIA QUERIES (DESKTOP E TABLETS)  */
-
-/* Tablet - 600px pra cima */
 @media (min-width: 600px) {
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -440,7 +437,6 @@ textarea.form-control {
   }
 }
 
-/* Desktop - 1000px pra cima */
 @media (min-width: 1000px) {
   .sidebar {
     transform: translateX(0);
@@ -449,21 +445,17 @@ textarea.form-control {
   .sidebar-overlay {
     display: none !important;
   }
-
-  /* CORREÇÃO DO LAYOUT HORIZONTAL E OVERFLOW AQUI */
   .main-wrap {
     margin-left: var(--sidebar-w);
     width: calc(100% - var(--sidebar-w));
     max-width: calc(100% - var(--sidebar-w));
   }
-
   .menu-toggle {
     display: none;
   }
   .topbar {
     padding: 0 24px;
   }
-
   .stats-grid {
     grid-template-columns: repeat(4, 1fr);
   }
@@ -545,8 +537,6 @@ textarea.form-control {
   object-position: left;
   filter: brightness(0) invert(1);
 }
-
-/* CORREÇÃO DO TEXTO FALLBACK AQUI */
 .login-logo-fallback {
   display: none;
   flex-direction: column;
@@ -557,7 +547,6 @@ textarea.form-control {
   align-items: center;
   gap: 10px;
 }
-
 .login-logo-icon {
   width: 44px;
   height: 44px;
