@@ -260,9 +260,11 @@
               role="button"
               aria-label="Notificações"
               tabindex="0"
+              onclick="toggleNotifPanel()"
+              onkeydown="if(event.key==='Enter')toggleNotifPanel()"
             >
               <i class="bi bi-bell" aria-hidden="true"></i
-              ><span class="notif-dot"></span>
+              ><span class="notif-dot" style="display:none"></span>
             </div>
             <div
               class="topbar-icon-btn"
