@@ -1,5 +1,12 @@
 /* ============================================================
    TOKENS — PALETA INSTITUCIONAL FCMSCSP
+   ============================================================
+   MANUTENÇÃO:
+   • Altere APENAS as variáveis CSS em :root para temas ou branding
+   • --sc-green-dark: cor primária institucional (sidebar, botões)
+   • --border / --border2: bordas suave / mais forte
+   • --text / --text2 / --text3: hierarquia de texto (100% / 65% / 40%)
+   • NUNCA use cores hardcoded fora deste bloco — use var(--...)
    ============================================================ */
 :root {
   --sc-green-dark: #1b5e20;
@@ -57,6 +64,14 @@ a {
 .hidden {
   display: none !important;
 }
+/* ============================================================
+   BADGES — indicadores de status
+   ACESSIBILIDADE: badges de status de agendamento são gerados
+   pela função badgeAgendamento() no JS, que sempre inclui ícone
+   para não depender exclusivamente de cor (daltonismo).
+   .badge-cancel: cinza neutro — distinguível de verde E âmbar
+   sem depender de percepção de vermelho/verde.
+   ============================================================ */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -83,6 +98,15 @@ a {
   background: #f1f5f1;
   color: var(--text2);
 }
+/* badge-cancel: status "cancelado" de agendamentos
+   USA CINZA NEUTRO — não vermelho — para não confundir
+   daltônicos vermelho-verde com badge-green (ativo/confirmado).
+   O ícone bi-slash-circle-fill é OBRIGATÓRIO junto ao texto. */
+.badge-cancel {
+  background: #e5e7eb;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
 .badge-teal {
   background: var(--sc-green-pale);
   color: var(--sc-green-dark);
@@ -99,6 +123,14 @@ a {
   color: var(--sc-green-dark);
 }
 
+/* ============================================================
+   BOTÕES
+   .btn-primary   → ação principal (verde institucional)
+   .btn-secondary → ação secundária (borda, fundo branco)
+   .btn-ghost     → ação terciária (transparente)
+   .btn-sm        → tamanho reduzido (tabelas, toolbars)
+   MANUTENÇÃO: não crie variantes de botão sem adicionar aqui.
+   ============================================================ */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -140,6 +172,11 @@ a {
   font-size: 12px;
 }
 
+/* ============================================================
+   CARDS — contêiner padrão de conteúdo
+   Estrutura: .card > .card-header + .card-body
+   MANUTENÇÃO: margin-bottom definido aqui (18px desktop, 12px mobile).
+   ============================================================ */
 .card {
   background: var(--surface);
   border-radius: var(--radius);
@@ -166,6 +203,13 @@ a {
   padding: 20px;
 }
 
+/* ============================================================
+   TABELAS E FORMULÁRIOS
+   Todas as tabelas têm .table-responsive como wrapper para
+   scroll horizontal em mobile.
+   ATENÇÃO: a tabela da agenda usa classes próprias (.agenda-table,
+   .agenda-td-slot etc.) definidas na seção AGENDA abaixo.
+   ============================================================ */
 /* Scroll horizontal em tabelas (Mobile First) */
 .table-responsive {
   width: 100%;
@@ -380,6 +424,8 @@ textarea.form-control {
   font-size: 15px;
   font-weight: 700;
   color: var(--text);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .topbar-search {
   display: none;
@@ -389,6 +435,7 @@ textarea.form-control {
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 .topbar-icon-btn {
   width: 32px;
@@ -415,8 +462,11 @@ textarea.form-control {
   .topbar-search {
     display: block;
     flex: 1;
-    max-width: 300px;
-    margin-left: auto;
+    max-width: 320px;
+    margin: 0 8px 0 auto;
+  }
+  .topbar-actions {
+    margin-left: 0;
   }
   .topbar-search-wrap {
     position: relative;
@@ -463,11 +513,14 @@ textarea.form-control {
   display: flex;
   min-height: 100vh;
   width: 100%;
-  overflow-x: hidden;
+  overflow: hidden; /* elimina scrollbar vertical/horizontal */
 }
 .login-left {
   display: none;
-  width: 460px;
+  width: 42%;           /* responsivo: % em vez de px fixo */
+  max-width: 480px;
+  min-width: 320px;
+  flex-shrink: 0;       /* não encolhe além de min-width */
   background: var(--sc-green-dark);
   flex-direction: column;
   padding: 44px;
@@ -597,11 +650,13 @@ textarea.form-control {
 
 .login-right {
   flex: 1;
+  min-width: 0;        /* evita overflow em flex */
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
   background: var(--bg);
+  overflow-y: auto;    /* scroll só no painel de login se necessário */
 }
 .login-card {
   background: var(--surface);
@@ -609,6 +664,7 @@ textarea.form-control {
   padding: 30px;
   width: 100%;
   max-width: 430px;
+  box-sizing: border-box; /* padding incluído na largura */
   box-shadow: 0 8px 40px rgba(27, 94, 32, 0.12);
   border: 1px solid var(--border);
 }
@@ -794,6 +850,40 @@ textarea.form-control {
 
 .page-content {
   padding: 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+}
+
+/* Botão Voltar — prontuário */
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sc-green-dark);
+  background: none;
+  border: none;
+  padding: 7px 0;
+  margin-bottom: 14px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition:
+    color 0.15s,
+    gap 0.15s;
+  text-decoration: none;
+}
+.back-btn:hover {
+  color: var(--sc-green-mid);
+  gap: 10px;
+}
+.back-btn i {
+  font-size: 14px;
+  transition: transform 0.15s;
+}
+.back-btn:hover i {
+  transform: translateX(-2px);
 }
 
 /* Transições de página */
@@ -912,6 +1002,16 @@ textarea.form-control {
   margin-bottom: 2px;
 }
 
+/* ============================================================
+   MODAIS E TOASTS
+   Modal: .modal-overlay > .modal > .modal-header + .modal-body + .modal-footer
+   Toast: gerado dinamicamente por toast() no JS.
+     .toast-success → verde escuro  (#166534)
+     .toast-error   → vermelho      (#991b1b)
+     .toast-warning → âmbar         (#92400e)
+     .toast-info    → verde institucional
+   MANUTENÇÃO: z-index do modal = 2000, do cancel-confirm = 3000.
+   ============================================================ */
 /* Modais e Toasts */
 .modal-overlay {
   position: fixed;
@@ -1377,7 +1477,38 @@ textarea.form-control {
   margin-top: 2px;
 }
 
-/* Calendar */
+/* ============================================================
+   AGENDA — CALENDÁRIO SEMANAL
+   ============================================================
+   ESTRUTURA HTML gerada pelo JS (renderAgenda):
+   .agenda-calendar-wrap
+     └─ table.agenda-table
+          ├─ thead > tr > th.agenda-th-corner + th.agenda-th[data-today]
+          └─ tbody > tr > td.agenda-td-hour + td.agenda-td-slot[.agenda-td-today][.agenda-td-empty]
+                                                 └─ div.cal-event-accessible
+                                                      ├─ div (nome do paciente — clicável → prontuário)
+                                                      ├─ div (local da sala)
+                                                      └─ div.agenda-ev-actions | div.agenda-ev-canceled-label
+
+   ACESSIBILIDADE (daltonismo):
+   • Bordas explícitas entre TODAS as células — estrutura legível
+     sem depender de cor para perceber separação de dias/horários.
+   • Coluna "hoje": fundo verde escuro + texto branco — diferencia
+     por CONTRASTE de brilho (>7:1), não apenas por matiz.
+   • Evento ativo: fundo #1b5e20 (verde escuro), borda #69c96d.
+   • Evento CANCELADO: fundo #e5e7eb (cinza neutro) + borda #9ca3af
+     + ícone bi-slash-circle + texto "cancelado" — NÃO usa vermelho
+     para não confundir daltônicos vermelho-verde com o verde dos
+     eventos ativos.
+
+   MANUTENÇÃO:
+   • Para mudar cor dos eventos, altere as variáveis em .cal-event-accessible
+   • Para cancelados, edite .agenda-ev-canceled-label e o style inline
+     background:#e5e7eb no renderAgenda() do JS.
+   • Alturas das linhas: min-height em .agenda-td-slot (44px)
+   ============================================================ */
+
+/* Legado: mantido para não quebrar código existente */
 .calendar-grid {
   display: grid;
   grid-template-columns: 58px repeat(5, 1fr);
@@ -1388,7 +1519,7 @@ textarea.form-control {
 }
 .cal-header {
   background: var(--sc-green-dark);
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(255, 255, 255, 0.9);
   font-size: 12px;
   font-weight: 600;
   padding: 10px 6px;
@@ -1423,25 +1554,167 @@ textarea.form-control {
 .cal-event:hover {
   filter: brightness(0.92);
 }
-.cal-event-green {
-  background: var(--sc-green-pale);
-  color: var(--sc-green-dark);
-  border-left: 3px solid var(--sc-green);
+.cal-event-green  { background: var(--sc-green-pale); color: var(--sc-green-dark); border-left: 3px solid var(--sc-green); }
+.cal-event-green2 { background: #d1fae5; color: #065f46; border-left: 3px solid #059669; }
+.cal-event-blue   { background: #dbeafe; color: #1e40af; border-left: 3px solid #3b82f6; }
+.cal-event-amber  { background: #fef3c7; color: #92400e; border-left: 3px solid #f59e0b; }
+
+/* ── AGENDA TABLE — view semanal principal ─────────────────── */
+
+/* Tabela: bordas explícitas em todas as células */
+.agenda-table {
+  width: 100%;
+  min-width: 580px;
+  border-collapse: collapse;
+  border: 2px solid var(--border2);
+  border-radius: var(--radius);
+  background: var(--surface);
+  table-layout: fixed;
 }
-.cal-event-green2 {
-  background: #d1fae5;
-  color: #065f46;
-  border-left: 3px solid #059669;
+
+/* Canto superior esquerdo (célula de hora no header) */
+.agenda-th-corner {
+  width: 62px;
+  background: var(--bg);
+  border-right: 2px solid var(--border2);
+  border-bottom: 2px solid var(--border2);
 }
-.cal-event-blue {
-  background: #dbeafe;
-  color: #1e40af;
-  border-left: 3px solid #3b82f6;
+
+/* Cabeçalho de cada dia */
+.agenda-th {
+  text-align: center;
+  padding: 8px 4px;
+  min-width: 110px;
+  background: var(--bg);
+  border-right: 1px solid var(--border2);
+  border-bottom: 2px solid var(--border2);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text3);
+  transition: background 0.15s;
 }
-.cal-event-amber {
-  background: #fef3c7;
-  color: #92400e;
-  border-left: 3px solid #f59e0b;
+/* Última coluna: sem border-right */
+.agenda-th:last-child {
+  border-right: none;
+}
+/* Coluna de HOJE: fundo verde escuro, texto branco — contraste WCAG AAA */
+.agenda-th[data-today="true"] {
+  background: var(--sc-green-dark);
+  color: #ffffff;
+}
+
+/* Célula de horário (coluna da esquerda) */
+.agenda-td-hour {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text2);
+  padding: 6px 10px;
+  white-space: nowrap;
+  background: #f6faf6;
+  border-right: 2px solid var(--border2);
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.2px;
+  text-align: right;
+  vertical-align: top;
+}
+
+/* Slot de evento (células de dados) */
+.agenda-td-slot {
+  padding: 3px 4px;
+  min-height: 64px;   /* altura generosa para 30min */
+  height: 64px;
+  vertical-align: top;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.agenda-td-slot:last-child {
+  border-right: none;
+}
+/* Célula da coluna de hoje: fundo levemente esverdeado */
+.agenda-td-today {
+  background: #f5fdf5;
+}
+/* Slot vazio */
+.agenda-td-empty {
+  cursor: default;
+}
+
+/* Última linha: sem border-bottom inferior */
+.agenda-table tbody tr:last-child .agenda-td-hour,
+.agenda-table tbody tr:last-child .agenda-td-slot {
+  border-bottom: none;
+}
+
+/* ── EVENTO NO CALENDÁRIO ──────────────────────────────────── */
+
+/* Bloco de evento principal */
+.cal-event-accessible {
+  border-radius: 5px;
+  padding: 5px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: default;
+  margin: 1px 0;
+  transition: filter 0.15s, transform 0.1s;
+  min-height: 48px;
+  overflow: hidden;
+}
+.cal-event-accessible:focus-within {
+  outline: 2px solid #69c96d;
+  outline-offset: 1px;
+}
+
+/* Botões de ação dentro do evento (Editar / Cancelar) */
+.agenda-ev-actions {
+  display: flex;
+  gap: 3px;
+  margin-top: 3px;
+}
+.agenda-ev-btn {
+  /* Botão base: fundo semitransparente sobre verde escuro */
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: background 0.12s;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.agenda-ev-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+.agenda-ev-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+/* Botão cancelar: fundo mais quente + borda distinguível */
+.agenda-ev-btn-cancel {
+  background: rgba(156, 163, 175, 0.35);
+  border-color: rgba(156, 163, 175, 0.5);
+}
+.agenda-ev-btn-cancel:hover {
+  background: rgba(156, 163, 175, 0.55);
+}
+
+/* Label de evento CANCELADO
+   ACESSIBILIDADE: usa cinza (#6b7280) não vermelho — evita
+   confusão com verde em daltônicos vermelho-verde. */
+.agenda-ev-canceled-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-top: 3px;
+  font-style: italic;
 }
 
 /* Empty States */
@@ -2362,6 +2635,225 @@ textarea.form-control {
 }
 .sidebar.open .nav-item:nth-child(7) {
   animation-delay: 0.2s;
+}
+
+/* ============================================================  MISSING UTILITY CLASSES  */
+
+/* form-row — base (used in JS modal generation, no-gap baseline) */
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+@media (min-width: 500px) {
+  .form-row.form-row-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+  .form-row.form-row-3 {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
+/* Pacientes filter bar */
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-box i {
+  position: absolute;
+  left: 10px;
+  color: var(--text3);
+  font-size: 13px;
+  pointer-events: none;
+}
+.search-box input {
+  padding: 7px 12px 7px 30px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  font-size: 13px;
+  background: var(--surface);
+  min-width: 200px;
+  font-family: inherit;
+}
+.search-box input:focus {
+  outline: none;
+  border-color: var(--sc-green-mid);
+  box-shadow: 0 0 0 3px rgba(56, 142, 60, 0.12);
+}
+.filter-select {
+  padding: 7px 10px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+}
+.filter-select:focus {
+  outline: none;
+  border-color: var(--sc-green-mid);
+}
+
+/* Permissions table */
+.perm-table th,
+.perm-table td {
+  padding: 10px 14px;
+  font-size: 13px;
+}
+.perm-yes {
+  color: #16a34a;
+  font-size: 14px;
+}
+.perm-cond {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #fef3c7;
+  color: #92400e;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.perm-never {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+}
+
+/* cal-event-accessible: movido para a seção AGENDA acima.
+   Mantido como stub para compatibilidade. */
+.calendar-grid thead th {
+  background: var(--bg) !important;
+}
+
+
+/* ============================================================
+   PAINEL DE NOTIFICAÇÕES
+   Aberto pelo clique no sininho (.topbar-icon-btn).
+   .notif-panel: dropdown posicionado via JS (fixed, top/right calculados)
+   MANUTENÇÃO: z-index 2500 (acima de sidebar 1000, abaixo de modal 2000)
+   ============================================================ */
+
+/* Badge contador no sininho */
+.notif-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: auto;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  display: none; /* mostrado via JS */
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* Painel dropdown */
+.notif-panel {
+  width: 360px;
+  max-height: 480px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 2500;
+  animation: notifPanelIn 0.15s ease;
+}
+@keyframes notifPanelIn {
+  from { opacity:0; transform:translateY(-8px) scale(0.97); }
+  to   { opacity:1; transform:none; }
+}
+.notif-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.notif-panel-body {
+  overflow-y: auto;
+  flex: 1;
+}
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.notif-item:hover { background: var(--bg); }
+.notif-item:last-child { border-bottom: none; }
+.notif-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.notif-body { flex: 1; min-width: 0; }
+.notif-titulo {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.notif-desc {
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.notif-ts {
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 3px;
+}
+.notif-dismiss {
+  background: none;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.notif-dismiss:hover { background: var(--border); color: var(--text); }
+
+/* Mobile: painel de notificações ocupa mais espaço */
+@media (max-width: 480px) {
+  .notif-panel {
+    width: calc(100vw - 24px);
+    right: 12px !important;
+  }
 }
 @keyframes sbItemIn {
   from {
