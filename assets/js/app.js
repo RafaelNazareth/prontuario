@@ -3345,7 +3345,7 @@ function renderDashboard() {
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
 
         <div class="card" style="flex:none">
-          <div class="card-header"><span class="card-title"><i class="bi bi-diagram-3-fill" style="color:#6d28d9"></i> Situação dos Grupos</span></div>
+          <div class="card-header"><span class="card-title"><i class="bi bi-diagram-3-fill" style="color:#6d28d9"></i> Situação atual</span></div>
           <div class="card-body" style="padding:10px 14px">
             <div style="display:flex;gap:10px;flex-wrap:wrap">
               <div class="dash-mini-stat" style="background:#f0fdf4;border-color:#bbf7d0">
