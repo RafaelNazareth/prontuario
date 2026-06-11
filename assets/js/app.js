@@ -1,5 +1,5 @@
 /* ============================================================  PERSISTÊNCIA E SEGURANÇA  */
-const STORAGE_KEY = "pep_fcmscsp_data_v12"; // v12: melhorias de segurança e qualidade
+const STORAGE_KEY = "pep_fcmscsp_data_v14"; // v14: 50 alunos/17 grupos, notificações, faltas, troca de paciente
 
 // ATENÇÃO: btoa/atob é ofuscação Base64, NÃO criptografia real.
 // Para produção, substituir por AES-GCM via SubtleCrypto ou mover para backend seguro.
@@ -34,12 +34,19 @@ let AGENDAMENTOS = [];
 let DOCUMENTOS = {};
 let AUDITORIA = [];
 let ACESSO_PACIENTE = [];
+// Notificações persistentes: faltas, alertas de evolução, troca de paciente
+let NOTIFICACOES = [];
+let FALTAS = []; // { id, agId, pacienteId, data, justificada, estudantesIds }
 
 function initData() {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     try {
       const data = desencriptar(stored);
+      // Valida estrutura mínima antes de aceitar
+      if (!Array.isArray(data.USERS) || !Array.isArray(data.PACIENTES)) {
+        throw new Error("Estrutura inválida");
+      }
       USERS = data.USERS || [];
       PACIENTES = data.PACIENTES || [];
       ANAMNESES = data.ANAMNESES || {};
@@ -48,7 +55,16 @@ function initData() {
       DOCUMENTOS = data.DOCUMENTOS || {};
       AUDITORIA = data.AUDITORIA || [];
       ACESSO_PACIENTE = data.ACESSO_PACIENTE || [];
+      NOTIFICACOES = data.NOTIFICACOES || [];
+      FALTAS = data.FALTAS || [];
+      // Migração: normaliza cores antigas para padrão acessível
+      _normalizeCores();
     } catch (e) {
+      // Corrupção detectada: NÃO apaga silenciosamente, avisa e usa mock
+      console.warn(
+        "[PEP] Dados corrompidos ou chave incompatível. Carregando dados de demonstração.",
+        e,
+      );
       mockData();
     }
   } else {
@@ -57,266 +73,2583 @@ function initData() {
 }
 
 function mockData() {
-  USERS = [
-    {
-      id: 1,
-      login: "tecnico",
-      pass: "1234",
-      nome: "Dr. Carlos Mendes",
-      papel: "tecnico",
-      avatar: "CM",
-      color: "#1b5e20",
-    },
-    {
-      id: 2,
-      login: "supervisor",
-      pass: "1234",
-      nome: "Profa. Ana Beatriz",
-      papel: "supervisor",
-      avatar: "AB",
-      color: "#2e7d32",
-    },
-    {
-      id: 3,
-      login: "estudante",
-      pass: "1234",
-      nome: "João Silva",
-      papel: "estudante",
-      avatar: "JS",
-      color: "#388e3c",
-    },
-    {
-      id: 5,
-      login: "estudante2",
-      pass: "1234",
-      nome: "Lucas Mendes",
-      papel: "estudante",
-      avatar: "LM",
-      color: "#2e7d32",
-    },
-    {
-      id: 6,
-      login: "estudante3",
-      pass: "1234",
-      nome: "Mariana Costa",
-      papel: "estudante",
-      avatar: "MC",
-      color: "#1b5e20",
-    },
-    {
-      id: 4,
-      login: "paciente",
-      pass: "1234",
-      nome: "Maria Fernanda",
-      papel: "paciente",
-      avatar: "MF",
-      color: "#43a047",
-    },
+  // ── USUÁRIOS FIXOS (login de demonstração) ────────────────────
+  const USERS_FIXOS = [
+    { id:1, login:"tecnico", pass:"1234", nome:"Dr. Carlos Mendes",
+      papel:"tecnico", avatar:"CM", color:"#1b5e20" },
   ];
+  // Supervisor de demonstração (login: supervisor / 1234)
+  // é o primeiro supervisor da lista abaixo (id=10)
+  // Estudante de demonstração (login: estudante / 1234) é est01 (id=100)
+  // Paciente de demonstração (login: paciente / 1234) é o paciente do grupo 0 (id=200)
+
+  // ── SUPERVISORES (5) ─────────────────────────────────────────
+  const SUPERVISORES_MOCK = [
+    {
+        "id": 10,
+        "login": "sup1",
+        "pass": "1234",
+        "nome": "Profa. Ana Beatriz",
+        "papel": "supervisor",
+        "avatar": "AB",
+        "color": "#2e7d32"
+    },
+    {
+        "id": 11,
+        "login": "sup2",
+        "pass": "1234",
+        "nome": "Prof. Carlos Eduardo",
+        "papel": "supervisor",
+        "avatar": "CE",
+        "color": "#2e7d32"
+    },
+    {
+        "id": 12,
+        "login": "sup3",
+        "pass": "1234",
+        "nome": "Profa. Denise Faria",
+        "papel": "supervisor",
+        "avatar": "DF",
+        "color": "#2e7d32"
+    },
+    {
+        "id": 13,
+        "login": "sup4",
+        "pass": "1234",
+        "nome": "Prof. Eduardo Moraes",
+        "papel": "supervisor",
+        "avatar": "EM",
+        "color": "#2e7d32"
+    },
+    {
+        "id": 14,
+        "login": "sup5",
+        "pass": "1234",
+        "nome": "Profa. Fernanda Leal",
+        "papel": "supervisor",
+        "avatar": "FL",
+        "color": "#2e7d32"
+    }
+];
+
+  // ── ESTUDANTES (50) ──────────────────────────────────────────
+  const ESTUDANTES_MOCK = [
+    {
+        "id": 100,
+        "login": "est01",
+        "pass": "1234",
+        "nome": "Ana Rocha",
+        "papel": "estudante",
+        "avatar": "AR",
+        "color": "#388e3c"
+    },
+    {
+        "id": 101,
+        "login": "est02",
+        "pass": "1234",
+        "nome": "Bruno Souza",
+        "papel": "estudante",
+        "avatar": "BS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 102,
+        "login": "est03",
+        "pass": "1234",
+        "nome": "Cláudia Silva",
+        "papel": "estudante",
+        "avatar": "CS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 103,
+        "login": "est04",
+        "pass": "1234",
+        "nome": "Daniel Castro",
+        "papel": "estudante",
+        "avatar": "DC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 104,
+        "login": "est05",
+        "pass": "1234",
+        "nome": "Elisa Lima",
+        "papel": "estudante",
+        "avatar": "EL",
+        "color": "#388e3c"
+    },
+    {
+        "id": 105,
+        "login": "est06",
+        "pass": "1234",
+        "nome": "Felipe Pereira",
+        "papel": "estudante",
+        "avatar": "FP",
+        "color": "#388e3c"
+    },
+    {
+        "id": 106,
+        "login": "est07",
+        "pass": "1234",
+        "nome": "Gabriela Pereira",
+        "papel": "estudante",
+        "avatar": "GP",
+        "color": "#388e3c"
+    },
+    {
+        "id": 107,
+        "login": "est08",
+        "pass": "1234",
+        "nome": "Hugo Rodrigues",
+        "papel": "estudante",
+        "avatar": "HR",
+        "color": "#388e3c"
+    },
+    {
+        "id": 108,
+        "login": "est09",
+        "pass": "1234",
+        "nome": "Isabela Castro",
+        "papel": "estudante",
+        "avatar": "IC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 109,
+        "login": "est10",
+        "pass": "1234",
+        "nome": "João Souza",
+        "papel": "estudante",
+        "avatar": "JS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 110,
+        "login": "est11",
+        "pass": "1234",
+        "nome": "Karen Dias",
+        "papel": "estudante",
+        "avatar": "KD",
+        "color": "#388e3c"
+    },
+    {
+        "id": 111,
+        "login": "est12",
+        "pass": "1234",
+        "nome": "Lucas Castro",
+        "papel": "estudante",
+        "avatar": "LC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 112,
+        "login": "est13",
+        "pass": "1234",
+        "nome": "Mariana Moreira",
+        "papel": "estudante",
+        "avatar": "MM",
+        "color": "#388e3c"
+    },
+    {
+        "id": 113,
+        "login": "est14",
+        "pass": "1234",
+        "nome": "Nathan Fernandes",
+        "papel": "estudante",
+        "avatar": "NF",
+        "color": "#388e3c"
+    },
+    {
+        "id": 114,
+        "login": "est15",
+        "pass": "1234",
+        "nome": "Olivia Oliveira",
+        "papel": "estudante",
+        "avatar": "OO",
+        "color": "#388e3c"
+    },
+    {
+        "id": 115,
+        "login": "est16",
+        "pass": "1234",
+        "nome": "Pedro Vieira",
+        "papel": "estudante",
+        "avatar": "PV",
+        "color": "#388e3c"
+    },
+    {
+        "id": 116,
+        "login": "est17",
+        "pass": "1234",
+        "nome": "Queila Carvalho",
+        "papel": "estudante",
+        "avatar": "QC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 117,
+        "login": "est18",
+        "pass": "1234",
+        "nome": "Rafael Santos",
+        "papel": "estudante",
+        "avatar": "RS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 118,
+        "login": "est19",
+        "pass": "1234",
+        "nome": "Sara Silva",
+        "papel": "estudante",
+        "avatar": "SS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 119,
+        "login": "est20",
+        "pass": "1234",
+        "nome": "Thiago Oliveira",
+        "papel": "estudante",
+        "avatar": "TO",
+        "color": "#388e3c"
+    },
+    {
+        "id": 120,
+        "login": "est21",
+        "pass": "1234",
+        "nome": "Ursula Alves",
+        "papel": "estudante",
+        "avatar": "UA",
+        "color": "#388e3c"
+    },
+    {
+        "id": 121,
+        "login": "est22",
+        "pass": "1234",
+        "nome": "Victor Pereira",
+        "papel": "estudante",
+        "avatar": "VP",
+        "color": "#388e3c"
+    },
+    {
+        "id": 122,
+        "login": "est23",
+        "pass": "1234",
+        "nome": "Wendy Sousa",
+        "papel": "estudante",
+        "avatar": "WS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 123,
+        "login": "est24",
+        "pass": "1234",
+        "nome": "Xavier Barbosa",
+        "papel": "estudante",
+        "avatar": "XB",
+        "color": "#388e3c"
+    },
+    {
+        "id": 124,
+        "login": "est25",
+        "pass": "1234",
+        "nome": "Yasmin Silva",
+        "papel": "estudante",
+        "avatar": "YS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 125,
+        "login": "est26",
+        "pass": "1234",
+        "nome": "Zanele Fernandes",
+        "papel": "estudante",
+        "avatar": "ZF",
+        "color": "#388e3c"
+    },
+    {
+        "id": 126,
+        "login": "est27",
+        "pass": "1234",
+        "nome": "Alice Alves",
+        "papel": "estudante",
+        "avatar": "AA",
+        "color": "#388e3c"
+    },
+    {
+        "id": 127,
+        "login": "est28",
+        "pass": "1234",
+        "nome": "Bernardo Monteiro",
+        "papel": "estudante",
+        "avatar": "BM",
+        "color": "#388e3c"
+    },
+    {
+        "id": 128,
+        "login": "est29",
+        "pass": "1234",
+        "nome": "Carla Rocha",
+        "papel": "estudante",
+        "avatar": "CR",
+        "color": "#388e3c"
+    },
+    {
+        "id": 129,
+        "login": "est30",
+        "pass": "1234",
+        "nome": "Diego Monteiro",
+        "papel": "estudante",
+        "avatar": "DM",
+        "color": "#388e3c"
+    },
+    {
+        "id": 130,
+        "login": "est31",
+        "pass": "1234",
+        "nome": "Eduarda Fernandes",
+        "papel": "estudante",
+        "avatar": "EF",
+        "color": "#388e3c"
+    },
+    {
+        "id": 131,
+        "login": "est32",
+        "pass": "1234",
+        "nome": "Fábio Carvalho",
+        "papel": "estudante",
+        "avatar": "FC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 132,
+        "login": "est33",
+        "pass": "1234",
+        "nome": "Gisele Pereira",
+        "papel": "estudante",
+        "avatar": "GP",
+        "color": "#388e3c"
+    },
+    {
+        "id": 133,
+        "login": "est34",
+        "pass": "1234",
+        "nome": "Henrique Almeida",
+        "papel": "estudante",
+        "avatar": "HA",
+        "color": "#388e3c"
+    },
+    {
+        "id": 134,
+        "login": "est35",
+        "pass": "1234",
+        "nome": "Ingrid Vieira",
+        "papel": "estudante",
+        "avatar": "IV",
+        "color": "#388e3c"
+    },
+    {
+        "id": 135,
+        "login": "est36",
+        "pass": "1234",
+        "nome": "Julio Lima",
+        "papel": "estudante",
+        "avatar": "JL",
+        "color": "#388e3c"
+    },
+    {
+        "id": 136,
+        "login": "est37",
+        "pass": "1234",
+        "nome": "Kelly Cunha",
+        "papel": "estudante",
+        "avatar": "KC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 137,
+        "login": "est38",
+        "pass": "1234",
+        "nome": "Leonardo Campos",
+        "papel": "estudante",
+        "avatar": "LC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 138,
+        "login": "est39",
+        "pass": "1234",
+        "nome": "Monica Silva",
+        "papel": "estudante",
+        "avatar": "MS",
+        "color": "#388e3c"
+    },
+    {
+        "id": 139,
+        "login": "est40",
+        "pass": "1234",
+        "nome": "Nelson Cardoso",
+        "papel": "estudante",
+        "avatar": "NC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 140,
+        "login": "est41",
+        "pass": "1234",
+        "nome": "Odete Cunha",
+        "papel": "estudante",
+        "avatar": "OC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 141,
+        "login": "est42",
+        "pass": "1234",
+        "nome": "Paulo Ferreira",
+        "papel": "estudante",
+        "avatar": "PF",
+        "color": "#388e3c"
+    },
+    {
+        "id": 142,
+        "login": "est43",
+        "pass": "1234",
+        "nome": "Renata Monteiro",
+        "papel": "estudante",
+        "avatar": "RM",
+        "color": "#388e3c"
+    },
+    {
+        "id": 143,
+        "login": "est44",
+        "pass": "1234",
+        "nome": "Silvio Carvalho",
+        "papel": "estudante",
+        "avatar": "SC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 144,
+        "login": "est45",
+        "pass": "1234",
+        "nome": "Tatiana Costa",
+        "papel": "estudante",
+        "avatar": "TC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 145,
+        "login": "est46",
+        "pass": "1234",
+        "nome": "Ulisses Lima",
+        "papel": "estudante",
+        "avatar": "UL",
+        "color": "#388e3c"
+    },
+    {
+        "id": 146,
+        "login": "est47",
+        "pass": "1234",
+        "nome": "Vera Rodrigues",
+        "papel": "estudante",
+        "avatar": "VR",
+        "color": "#388e3c"
+    },
+    {
+        "id": 147,
+        "login": "est48",
+        "pass": "1234",
+        "nome": "Willian Alves",
+        "papel": "estudante",
+        "avatar": "WA",
+        "color": "#388e3c"
+    },
+    {
+        "id": 148,
+        "login": "est49",
+        "pass": "1234",
+        "nome": "Xiomara Cardoso",
+        "papel": "estudante",
+        "avatar": "XC",
+        "color": "#388e3c"
+    },
+    {
+        "id": 149,
+        "login": "est50",
+        "pass": "1234",
+        "nome": "Yolanda Costa",
+        "papel": "estudante",
+        "avatar": "YC",
+        "color": "#388e3c"
+    }
+];
+
+  // Ajustar logins de demonstração para funcionar com as contas de teste
+  const sup0 = SUPERVISORES_MOCK[0];
+  sup0.login = "supervisor"; sup0.pass = "1234";
+  const est0 = ESTUDANTES_MOCK[0];
+  est0.login = "estudante"; est0.pass = "1234";
+
+  USERS = [
+    ...USERS_FIXOS,
+    ...SUPERVISORES_MOCK,
+    ...ESTUDANTES_MOCK,
+    // Conta paciente de demonstração (acessa prontuário do paciente id=200)
+    { id:200, login:"paciente", pass:"1234", nome:"Laura Assis",
+      papel:"paciente", avatar:"LA", color:"#1b5e20" },
+  ];
+
+  // ── PACIENTES (17 — 1 por grupo) ─────────────────────────────
   PACIENTES = [
     {
-      id: 1,
-      nome: "Ana Lima",
-      cpf: "123.456.789-00",
-      nascimento: "1990-03-15",
-      telefone: "(11) 98765-4321",
-      email: "ana@email.com",
-      estudantesIds: [3, 5, 6],
-      supervisorId: 2,
-      status: "ativo",
-      cor: "#1b5e20",
-      ini: "AL",
+        "id": 200,
+        "nome": "Laura Assis",
+        "cpf": "100.000.000-00",
+        "nascimento": "1970-01-01",
+        "telefone": "(11) 92674-2519",
+        "email": "laura.assis@email.com",
+        "estudantesIds": [
+            100,
+            101,
+            102
+        ],
+        "supervisorId": 10,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "LA",
+        "faltas": []
     },
     {
-      id: 2,
-      nome: "Bruno Carvalho",
-      cpf: "234.567.890-11",
-      nascimento: "1985-07-22",
-      telefone: "(11) 91234-5678",
-      email: "bruno@email.com",
-      estudantesIds: [3],
-      supervisorId: 2,
-      status: "ativo",
-      cor: "#2e7d32",
-      ini: "BC",
+        "id": 201,
+        "nome": "Marcos Barros",
+        "cpf": "101.111.111-11",
+        "nascimento": "1973-02-02",
+        "telefone": "(11) 97224-2584",
+        "email": "marcos.barros@email.com",
+        "estudantesIds": [
+            103,
+            104,
+            105
+        ],
+        "supervisorId": 11,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "MB",
+        "faltas": []
     },
     {
-      id: 3,
-      nome: "Cláudia Santos",
-      cpf: "345.678.901-22",
-      nascimento: "1998-11-05",
-      telefone: "(11) 99876-5432",
-      email: "claudia@email.com",
-      estudantesIds: [5, 6],
-      supervisorId: 2,
-      status: "ativo",
-      cor: "#388e3c",
-      ini: "CS",
+        "id": 202,
+        "nome": "Beatriz Coelho",
+        "cpf": "102.222.222-22",
+        "nascimento": "1976-03-03",
+        "telefone": "(11) 96881-6635",
+        "email": "beatriz.coelho@email.com",
+        "estudantesIds": [
+            106,
+            107,
+            108
+        ],
+        "supervisorId": 12,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "BC",
+        "faltas": []
     },
     {
-      id: 4,
-      nome: "Maria Fernanda",
-      cpf: "456.789.012-33",
-      nascimento: "1975-02-28",
-      telefone: "(11) 97654-3210",
-      email: "maria@email.com",
-      estudantesIds: [3],
-      supervisorId: 2,
-      status: "ativo",
-      cor: "#6d4c41",
-      ini: "MF",
+        "id": 203,
+        "nome": "Rodrigo Duarte",
+        "cpf": "103.333.333-33",
+        "nascimento": "1979-04-04",
+        "telefone": "(11) 95333-1711",
+        "email": "rodrigo.duarte@email.com",
+        "estudantesIds": [
+            109,
+            110,
+            111
+        ],
+        "supervisorId": 13,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "RD",
+        "faltas": []
     },
     {
-      id: 5,
-      nome: "Elisa Ferreira",
-      cpf: "567.890.123-44",
-      nascimento: "2001-09-18",
-      telefone: "(11) 96543-2109",
-      email: "elisa@email.com",
-      estudantesIds: [3, 6],
-      supervisorId: 2,
-      status: "ativo",
-      cor: "#43a047",
-      ini: "EF",
+        "id": 204,
+        "nome": "Leticia Esteves",
+        "cpf": "104.444.444-44",
+        "nascimento": "1982-05-05",
+        "telefone": "(11) 98527-9785",
+        "email": "leticia.esteves@email.com",
+        "estudantesIds": [
+            112,
+            113,
+            114
+        ],
+        "supervisorId": 14,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "LE",
+        "faltas": []
     },
-  ];
+    {
+        "id": 205,
+        "nome": "André Fontes",
+        "cpf": "105.555.555-55",
+        "nascimento": "1985-06-06",
+        "telefone": "(11) 93045-7201",
+        "email": "andré.fontes@email.com",
+        "estudantesIds": [
+            115,
+            116,
+            117
+        ],
+        "supervisorId": 10,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "AF",
+        "faltas": []
+    },
+    {
+        "id": 206,
+        "nome": "Patrícia Guedes",
+        "cpf": "106.666.666-66",
+        "nascimento": "1988-07-07",
+        "telefone": "(11) 92291-5803",
+        "email": "patrícia.guedes@email.com",
+        "estudantesIds": [
+            118,
+            119,
+            120
+        ],
+        "supervisorId": 11,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "PG",
+        "faltas": []
+    },
+    {
+        "id": 207,
+        "nome": "Renato Hora",
+        "cpf": "107.777.777-77",
+        "nascimento": "1991-08-08",
+        "telefone": "(11) 96925-4150",
+        "email": "renato.hora@email.com",
+        "estudantesIds": [
+            121,
+            122,
+            123
+        ],
+        "supervisorId": 12,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "RH",
+        "faltas": []
+    },
+    {
+        "id": 208,
+        "nome": "Camila Ivo",
+        "cpf": "108.888.888-88",
+        "nascimento": "1994-09-09",
+        "telefone": "(11) 92139-1750",
+        "email": "camila.ivo@email.com",
+        "estudantesIds": [
+            124,
+            125,
+            126
+        ],
+        "supervisorId": 13,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "CI",
+        "faltas": []
+    },
+    {
+        "id": 209,
+        "nome": "Sérgio Jardim",
+        "cpf": "109.999.999-99",
+        "nascimento": "1997-10-10",
+        "telefone": "(11) 94733-5741",
+        "email": "sérgio.jardim@email.com",
+        "estudantesIds": [
+            127,
+            128,
+            129
+        ],
+        "supervisorId": 14,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "SJ",
+        "faltas": []
+    },
+    {
+        "id": 210,
+        "nome": "Fernanda Kuroki",
+        "cpf": "111.111.111-10",
+        "nascimento": "2000-11-11",
+        "telefone": "(11) 92307-4814",
+        "email": "fernanda.kuroki@email.com",
+        "estudantesIds": [
+            130,
+            131,
+            132
+        ],
+        "supervisorId": 10,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "FK",
+        "faltas": []
+    },
+    {
+        "id": 211,
+        "nome": "Tiago Leite",
+        "cpf": "112.222.222-21",
+        "nascimento": "2003-12-12",
+        "telefone": "(11) 92654-7227",
+        "email": "tiago.leite@email.com",
+        "estudantesIds": [
+            133,
+            134,
+            135
+        ],
+        "supervisorId": 11,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "TL",
+        "faltas": []
+    },
+    {
+        "id": 212,
+        "nome": "Amanda Melo",
+        "cpf": "113.333.333-32",
+        "nascimento": "2006-01-13",
+        "telefone": "(11) 95554-8428",
+        "email": "amanda.melo@email.com",
+        "estudantesIds": [
+            136,
+            137,
+            138
+        ],
+        "supervisorId": 12,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "AM",
+        "faltas": []
+    },
+    {
+        "id": 213,
+        "nome": "Roberto Nobre",
+        "cpf": "114.444.444-43",
+        "nascimento": "2009-02-14",
+        "telefone": "(11) 96977-3664",
+        "email": "roberto.nobre@email.com",
+        "estudantesIds": [
+            139,
+            140,
+            141
+        ],
+        "supervisorId": 13,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "RN",
+        "faltas": []
+    },
+    {
+        "id": 214,
+        "nome": "Simone Ota",
+        "cpf": "115.555.555-54",
+        "nascimento": "1972-03-15",
+        "telefone": "(11) 97065-6820",
+        "email": "simone.ota@email.com",
+        "estudantesIds": [
+            142,
+            143,
+            144
+        ],
+        "supervisorId": 14,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "SO",
+        "faltas": []
+    },
+    {
+        "id": 215,
+        "nome": "Fabiana Prado",
+        "cpf": "116.666.666-65",
+        "nascimento": "1975-04-16",
+        "telefone": "(11) 94432-5374",
+        "email": "fabiana.prado@email.com",
+        "estudantesIds": [
+            145,
+            146,
+            147
+        ],
+        "supervisorId": 10,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "FP",
+        "faltas": []
+    },
+    {
+        "id": 216,
+        "nome": "Leonardo Queiroz",
+        "cpf": "117.777.777-76",
+        "nascimento": "1978-05-17",
+        "telefone": "(11) 92169-3803",
+        "email": "leonardo.queiroz@email.com",
+        "estudantesIds": [
+            148,
+            149
+        ],
+        "supervisorId": 11,
+        "status": "ativo",
+        "cor": "#1b5e20",
+        "ini": "LQ",
+        "faltas": []
+    }
+];
+
+  // ── ANAMNESES (algumas concluídas para realismo) ──────────────
   ANAMNESES = {
-    1: {
-      queixa:
-        "Ansiedade generalizada com dificuldade de concentração no trabalho.",
-      historia: "Início há 2 anos, promoção profissional.",
-      historico_medico: "Nega histórico familiar.",
-      medicamentos: "Melatonina.",
-      contexto: "Casada, dois filhos.",
-      hipoteses: "TAG.",
-      status: "finalizada",
-      rascunho: false,
-    },
-    2: {
-      queixa: "Tristeza profunda e retraimento social há 6 meses.",
-      historia: "Término de relacionamento de 5 anos.",
-      historico_medico: "Episódio depressivo leve na adolescência.",
-      medicamentos: "Nenhum.",
-      contexto: "Solteiro.",
-      hipoteses: "Depressão moderada.",
-      status: "finalizada",
-      rascunho: false,
-    },
+    200: { queixa:"Ansiedade generalizada com dificuldade de concentração.",
+           historia:"Início há 2 anos após promoção profissional.",
+           historico_medico:"Nega histórico relevante.",
+           medicamentos:"Melatonina 2mg.",
+           contexto:"Casada, dois filhos.", hipoteses:"TAG (F41.1)",
+           status:"finalizada", rascunho:false },
+    201: { queixa:"Tristeza profunda e retraimento social há 6 meses.",
+           historia:"Término de relacionamento de 5 anos.",
+           historico_medico:"Episódio depressivo leve na adolescência.",
+           medicamentos:"Nenhum.", contexto:"Solteiro.",
+           hipoteses:"Depressão moderada (F32.1)",
+           status:"finalizada", rascunho:false },
+    202: { queixa:"Dificuldades de relacionamento interpessoal.",
+           historia:"Histórico de perdas na infância.",
+           historico_medico:"Sem uso de medicamentos.",
+           medicamentos:"Nenhum.", contexto:"Mora sozinho.",
+           hipoteses:"Transtorno de adaptação (F43.2)",
+           status:"rascunho", rascunho:true },
   };
+
+  // ── EVOLUÇÕES (iniciais de exemplo) ──────────────────────────
   EVOLUCOES = {
-    1: [
-      {
-        id: 101,
-        num: 1,
-        data: "2026-06-01 14:00",
-        autor: "João Silva",
-        papel: "estudante",
-        tipo: "atendimento",
-        conteudo: "Sessão de acolhimento. Paciente receptiva.",
-        tags: ["acolhimento"],
-      },
-      {
-        id: 102,
-        num: 2,
-        data: "2026-06-08 14:00",
-        autor: "Lucas Mendes",
-        papel: "estudante",
-        tipo: "atendimento",
-        conteudo: "Exploração da história de vida.",
-        tags: ["TCC"],
-      },
+    200: [
+      { id:10001, num:1, data:"2026-06-02 08:00", autor:"Est. Ana Rocha",
+         papel:"estudante", tipo:"atendimento",
+         conteudo:"Sessão de acolhimento. Paciente receptiva, relato de ansiedade moderada.",
+         tags:["acolhimento"] },
+      { id:10002, num:2, data:"2026-06-09 08:00", autor:"Est. Ana Rocha",
+         papel:"estudante", tipo:"atendimento",
+         conteudo:"Exploração da história de vida. Identificação de gatilhos de ansiedade.",
+         tags:["TCC","ansiedade"] },
     ],
-    2: [
-      {
-        id: 201,
-        num: 1,
-        data: "2026-06-02 10:00",
-        autor: "João Silva",
-        papel: "estudante",
-        tipo: "atendimento",
-        conteudo: "Sessão inicial.",
-        tags: ["acolhimento"],
-      },
+    201: [
+      { id:10003, num:1, data:"2026-06-02 08:30", autor:"Est. Daniel Castro",
+         papel:"estudante", tipo:"atendimento",
+         conteudo:"Primeira sessão. Paciente apresenta humor rebaixado e anedonia.",
+         tags:["acolhimento","depressão"] },
     ],
   };
+
+  // ── AGENDAMENTOS (junho e julho 2026) ────────────────────────
   AGENDAMENTOS = [
     {
-      id: 1,
-      pacienteId: 1,
-      estudanteId: 3,
-      supervisorId: 2,
-      data: "2026-06-01",
-      hora: "14:00",
-      local: "Sala 01",
-      modalidade: "presencial",
-      status: "confirmado",
+        "id": 1000,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-06-08",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
     },
     {
-      id: 2,
-      pacienteId: 2,
-      estudanteId: 3,
-      supervisorId: 2,
-      data: "2026-06-02",
-      hora: "10:00",
-      local: "Sala 02",
-      modalidade: "presencial",
-      status: "confirmado",
+        "id": 1001,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-06-15",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
     },
     {
-      id: 3,
-      pacienteId: 3,
-      estudanteId: 5,
-      supervisorId: 2,
-      data: "2026-06-03",
-      hora: "15:00",
-      local: "Sala 01",
-      modalidade: "presencial",
-      status: "confirmado",
+        "id": 1002,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-06-22",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
     },
-  ];
+    {
+        "id": 1003,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-06-29",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1004,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-07-06",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1005,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-07-13",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1006,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-07-20",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1007,
+        "pacienteId": 200,
+        "estudanteId": 100,
+        "supervisorId": 10,
+        "data": "2026-07-27",
+        "hora": "08:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1008,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-06-02",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1009,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-06-09",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "faltou"
+    },
+    {
+        "id": 1010,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-06-16",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1011,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-06-23",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1012,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-06-30",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1013,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-07-07",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "faltou"
+    },
+    {
+        "id": 1014,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-07-14",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1015,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-07-21",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1016,
+        "pacienteId": 201,
+        "estudanteId": 103,
+        "supervisorId": 11,
+        "data": "2026-07-28",
+        "hora": "08:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1017,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-06-03",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1018,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-06-10",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1019,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-06-17",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1020,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-06-24",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1021,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-07-01",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1022,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-07-08",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1023,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-07-15",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1024,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-07-22",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1025,
+        "pacienteId": 202,
+        "estudanteId": 106,
+        "supervisorId": 12,
+        "data": "2026-07-29",
+        "hora": "09:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1026,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-06-04",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1027,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-06-11",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1028,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-06-18",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1029,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-06-25",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1030,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-07-02",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1031,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-07-09",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1032,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-07-16",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1033,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-07-23",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1034,
+        "pacienteId": 203,
+        "estudanteId": 109,
+        "supervisorId": 13,
+        "data": "2026-07-30",
+        "hora": "09:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1035,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-06-05",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1036,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-06-12",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1037,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-06-19",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1038,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-06-26",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1039,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-07-03",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1040,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-07-10",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1041,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-07-17",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1042,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-07-24",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1043,
+        "pacienteId": 204,
+        "estudanteId": 112,
+        "supervisorId": 14,
+        "data": "2026-07-31",
+        "hora": "10:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1044,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-06-08",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1045,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-06-15",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1046,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-06-22",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1047,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-06-29",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1048,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-07-06",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1049,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-07-13",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1050,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-07-20",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1051,
+        "pacienteId": 205,
+        "estudanteId": 115,
+        "supervisorId": 10,
+        "data": "2026-07-27",
+        "hora": "10:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1052,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-06-02",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "cancelado"
+    },
+    {
+        "id": 1053,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-06-09",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1054,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-06-16",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1055,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-06-23",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1056,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-06-30",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1057,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-07-07",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1058,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-07-14",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1059,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-07-21",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1060,
+        "pacienteId": 206,
+        "estudanteId": 118,
+        "supervisorId": 11,
+        "data": "2026-07-28",
+        "hora": "11:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1061,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-06-03",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1062,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-06-10",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1063,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-06-17",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1064,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-06-24",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1065,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-07-01",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1066,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-07-08",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1067,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-07-15",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1068,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-07-22",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1069,
+        "pacienteId": 207,
+        "estudanteId": 121,
+        "supervisorId": 12,
+        "data": "2026-07-29",
+        "hora": "11:30",
+        "local": "Sala 08",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1070,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-06-04",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1071,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-06-11",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1072,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-06-18",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1073,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-06-25",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1074,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-07-02",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1075,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-07-09",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1076,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-07-16",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1077,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-07-23",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1078,
+        "pacienteId": 208,
+        "estudanteId": 124,
+        "supervisorId": 13,
+        "data": "2026-07-30",
+        "hora": "13:00",
+        "local": "Consultório 1",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1079,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-06-05",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1080,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-06-12",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1081,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-06-19",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1082,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-06-26",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1083,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-07-03",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1084,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-07-10",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1085,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-07-17",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1086,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-07-24",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1087,
+        "pacienteId": 209,
+        "estudanteId": 127,
+        "supervisorId": 14,
+        "data": "2026-07-31",
+        "hora": "13:30",
+        "local": "Consultório 2",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1088,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-06-08",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1089,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-06-15",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1090,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-06-22",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1091,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-06-29",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1092,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-07-06",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1093,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-07-13",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1094,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-07-20",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1095,
+        "pacienteId": 210,
+        "estudanteId": 130,
+        "supervisorId": 10,
+        "data": "2026-07-27",
+        "hora": "14:00",
+        "local": "Sala 01",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1096,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-06-02",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1097,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-06-09",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1098,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-06-16",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1099,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-06-23",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1100,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-06-30",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "cancelado"
+    },
+    {
+        "id": 1101,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-07-07",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1102,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-07-14",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1103,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-07-21",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "cancelado"
+    },
+    {
+        "id": 1104,
+        "pacienteId": 211,
+        "estudanteId": 133,
+        "supervisorId": 11,
+        "data": "2026-07-28",
+        "hora": "14:30",
+        "local": "Sala 02",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1105,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-06-03",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1106,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-06-10",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1107,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-06-17",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "cancelado"
+    },
+    {
+        "id": 1108,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-06-24",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1109,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-07-01",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1110,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-07-08",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1111,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-07-15",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1112,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-07-22",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1113,
+        "pacienteId": 212,
+        "estudanteId": 136,
+        "supervisorId": 12,
+        "data": "2026-07-29",
+        "hora": "15:00",
+        "local": "Sala 03",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1114,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-06-04",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1115,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-06-11",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1116,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-06-18",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1117,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-06-25",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1118,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-07-02",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1119,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-07-09",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1120,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-07-16",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1121,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-07-23",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1122,
+        "pacienteId": 213,
+        "estudanteId": 139,
+        "supervisorId": 13,
+        "data": "2026-07-30",
+        "hora": "15:30",
+        "local": "Sala 04",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1123,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-06-05",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1124,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-06-12",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1125,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-06-19",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1126,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-06-26",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1127,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-07-03",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1128,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-07-10",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1129,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-07-17",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1130,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-07-24",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1131,
+        "pacienteId": 214,
+        "estudanteId": 142,
+        "supervisorId": 14,
+        "data": "2026-07-31",
+        "hora": "16:00",
+        "local": "Sala 05",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1132,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-06-08",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1133,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-06-15",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1134,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-06-22",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1135,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-06-29",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1136,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-07-06",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1137,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-07-13",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1138,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-07-20",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1139,
+        "pacienteId": 215,
+        "estudanteId": 145,
+        "supervisorId": 10,
+        "data": "2026-07-27",
+        "hora": "16:30",
+        "local": "Sala 06",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1140,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-06-02",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1141,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-06-09",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1142,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-06-16",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1143,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-06-23",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "cancelado"
+    },
+    {
+        "id": 1144,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-06-30",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1145,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-07-07",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1146,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-07-14",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1147,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-07-21",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    },
+    {
+        "id": 1148,
+        "pacienteId": 216,
+        "estudanteId": 148,
+        "supervisorId": 11,
+        "data": "2026-07-28",
+        "hora": "08:00",
+        "local": "Sala 07",
+        "modalidade": "presencial",
+        "status": "confirmado"
+    }
+];
+
+  // ── DOCUMENTOS ───────────────────────────────────────────────
   DOCUMENTOS = {
-    1: [
-      {
-        id: "d1",
-        nome: "Autorização.pdf",
-        tipo: "pdf",
-        tamanho: "124 KB",
-        data: "2026-05-10",
-        autor: "Dr. Carlos Mendes",
-      },
-    ],
+    200: [{ id:"d1", nome:"Termo_Consentimento_Laura.pdf", tipo:"pdf",
+            tamanho:"124 KB", data:"2026-05-28", autor:"Dr. Carlos Mendes" }],
   };
+
+  // ── AUDITORIA ────────────────────────────────────────────────
   AUDITORIA = [
-    {
-      id: 1,
-      tipo: "cadastro",
-      ator: "Dr. Carlos Mendes",
-      acao: "Cadastrou paciente",
-      obj: "Elisa Ferreira",
-      ts: "2026-05-28 10:05",
-      dot: "#388e3c",
-    },
+    { id:1, tipo:"cadastro", ator:"Dr. Carlos Mendes",
+      acao:"Importou dados do semestre 2026/1", obj:"50 estudantes · 17 grupos",
+      ts:"2026-05-28 09:00", dot:"#1b5e20" },
   ];
+
+  // ── ACESSO PACIENTE ──────────────────────────────────────────
   ACESSO_PACIENTE = [
-    {
-      id: 1,
-      pacienteId: 1,
-      nome: "Ana Lima",
-      status: "pendente",
-      solicitacao: "2026-06-01",
-      protocolo: "PROT-2026-001",
-    },
-    {
-      id: 2,
-      pacienteId: 4,
-      nome: "Maria Fernanda",
-      status: "liberado",
-      solicitacao: "2026-06-02",
-      liberacao: "2026-06-02",
-      protocolo: "PROT-2026-002",
-    },
+    { id:1, pacienteId:200, nome:"Laura Assis", status:"liberado",
+      solicitacao:"2026-06-01", liberacao:"2026-06-01",
+      protocolo:"PROT-2026-001" },
   ];
+
+  // ── NOTIFICAÇÕES E FALTAS ────────────────────────────────────
+  NOTIFICACOES = [];
+  FALTAS = [];
+
   saveData();
+}
+
+// Garante que TODOS os pacientes usem a cor institucional #1b5e20
+function _normalizeCores() {
+  const COR_PADRAO = "#1b5e20";
+  let changed = false;
+  PACIENTES.forEach((p) => {
+    if (p.cor !== COR_PADRAO) {
+      p.cor = COR_PADRAO;
+      changed = true;
+    }
+  });
+  if (changed) saveData();
+}
+
+
+// =============================================================
+// Retorna HTML completo de badge de status de agendamento.
+// ACESSIBILIDADE: sempre inclui ícone + texto para não depender
+// exclusivamente de cor — essencial para daltonismo.
+// =============================================================
+function badgeAgendamento(status) {
+  const map = {
+    confirmado: { cls: "badge-green",  icon: "bi-check-circle-fill", label: "confirmado" },
+    pendente:   { cls: "badge-amber",  icon: "bi-clock-fill",        label: "pendente"   },
+    cancelado:  { cls: "badge-cancel", icon: "bi-slash-circle-fill", label: "cancelado"  },
+    faltou:     { cls: "badge-amber",  icon: "bi-person-x-fill",     label: "faltou"     },
+  };
+  const b = map[status] || { cls: "badge-gray", icon: "bi-question-circle", label: status };
+  return `<span class="badge ${b.cls}"><i class="bi ${b.icon}" aria-hidden="true"></i>${escapeHTML(b.label)}</span>`;
 }
 
 function saveData() {
@@ -331,9 +2664,22 @@ function saveData() {
       DOCUMENTOS,
       AUDITORIA,
       ACESSO_PACIENTE,
+      NOTIFICACOES,
+      FALTAS,
     }),
   );
 }
+// ─────────────────────────────────────────────────────────────
+// logAudit(tipo, acao, obj)
+// Registra entrada imutável na trilha de auditoria (AUDITORIA[]).
+//
+// tipo: 'login' | 'cadastro' | 'evolucao' | 'agenda' | 'acesso' | ...
+// acao: texto descritivo da ação (ex: 'Editou agendamento')
+// obj:  nome do paciente ou objeto afetado
+//
+// IMPORTANTE: entradas de auditoria NUNCA são apagadas.
+// Para produção, mover para API REST com servidor de logs.
+// ─────────────────────────────────────────────────────────────
 function logAudit(tipo, acao, obj) {
   AUDITORIA.unshift({
     id: Date.now(),
@@ -349,6 +2695,17 @@ function logAudit(tipo, acao, obj) {
 
 /* ============================================================  MOTOR DE PERMISSÕES DA LGPD  */
 // Esta é a função central que dita quem pode ver o quê, baseada no papel de quem fez o login.
+// ─────────────────────────────────────────────────────────────
+// getPacientesPermitidos()
+// Controle de acesso por papel (RBAC simples).
+//
+// tecnico   → todos os pacientes
+// supervisor → pacientes onde supervisorId === currentUser.id
+// estudante  → pacientes onde estudantesIds inclui currentUser.id
+// paciente   → somente o próprio cadastro (id === currentUser.id)
+//
+// MANUTENÇÃO: se adicionar um novo papel, adicione um case aqui.
+// ─────────────────────────────────────────────────────────────
 function getPacientesPermitidos() {
   if (!currentUser) return [];
   if (currentUser.papel === "tecnico") {
@@ -559,6 +2916,7 @@ function initApp(restorePage) {
   if (footerName) footerName.textContent = u.nome;
 
   buildSidebar();
+  setTimeout(_updateNotifBadge, 200);
   navigate(
     restorePage || (u.papel === "paciente" ? "meu-prontuario" : "dashboard"),
   );
@@ -590,6 +2948,13 @@ function buildSidebar() {
   });
 }
 
+// ─────────────────────────────────────────────────────────────
+// navigate(page)
+// Roteador central do SPA. Renderiza a página no #page-content.
+// Páginas: dashboard, pacientes, agenda, prontuario,
+//   meu-prontuario, acesso, acesso-pac, auditoria.
+// MANUTENÇÃO: para nova página, crie render<X>() + case + NAV_CONFIG.
+// ─────────────────────────────────────────────────────────────
 function navigate(page) {
   if (page.startsWith("prontuario_"))
     return openProntuario(parseInt(page.split("_")[1]));
@@ -613,6 +2978,9 @@ function navigate(page) {
     document.getElementById("sidebar").classList.remove("open");
     document.getElementById("sidebar-overlay").classList.remove("open");
   }
+  // Limpa campo de busca ao navegar
+  const gs = document.getElementById("global-search");
+  if (gs) gs.value = "";
 
   const pc = document.getElementById("page-content");
   pc.classList.add("page-transitioning");
@@ -963,38 +3331,74 @@ function renderDashboard() {
     </div>
 
     <div class="dash-row-3" style="margin-bottom:20px">
-      <div class="card" style="flex:2;min-width:0">
+
+      <div class="card" style="flex:1.35;min-width:0">
         <div class="card-header">
-          <span class="card-title"><i class="bi bi-bar-chart-line-fill" style="color:var(--sc-green)"></i> Carga de Casos por Estudante</span>
-          <span style="font-size:11px;color:var(--text3)">casos alocados × evoluções redigidas</span>
+          <span class="card-title"><i class="bi bi-bar-chart-line-fill" style="color:var(--sc-green)"></i> Atendimentos por Mês</span>
+          <span style="font-size:11px;color:var(--text3)">consultas realizadas × canceladas</span>
         </div>
-        <div class="card-body" style="padding-top:10px"><div class="chart-container" style="height:220px"><canvas id="chartCargaEstudante"></canvas></div></div>
+        <div class="card-body" style="padding:10px 14px 14px">
+          <div class="chart-container" style="height:190px"><canvas id="chartAtendMes"></canvas></div>
+        </div>
       </div>
-      <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:16px">
-        <div class="card" style="flex:1">
-          <div class="card-header"><span class="card-title"><i class="bi bi-pie-chart-fill" style="color:#6d28d9"></i> Anamneses</span></div>
-          <div class="card-body" style="padding:10px"><div class="chart-container" style="height:130px"><canvas id="chartAnamneses"></canvas></div></div>
-        </div>
-        <div class="card" style="flex:1">
-          <div class="card-header"><span class="card-title"><i class="bi bi-calendar-event" style="color:var(--sc-green)"></i> Agenda Hoje</span></div>
+
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
+
+        <div class="card" style="flex:none">
+          <div class="card-header"><span class="card-title"><i class="bi bi-diagram-3-fill" style="color:#6d28d9"></i> Situação dos Grupos</span></div>
           <div class="card-body" style="padding:10px 14px">
-            ${
-              agsHoje.length === 0
-                ? `<div style="text-align:center;padding:14px 0;font-size:12px;color:var(--text3)"><i class="bi bi-calendar-x" style="font-size:22px;display:block;margin-bottom:6px"></i>Nenhum atendimento hoje</div>`
-                : agsHoje
-                    .map((ag) => {
-                      const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-                      return `<div class="dash-today-item" onclick="openProntuario(${ag.pacienteId})">
-                    <div class="dash-today-hora">${ag.hora}</div>
-                    <div class="dash-today-dot" style="background:${pac?.cor || "#888"}"></div>
-                    <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHTML(pac?.nome || "—")}</div><div style="font-size:10px;color:var(--text3)">${escapeHTML(ag.local)}</div></div>
-                  </div>`;
-                    })
-                    .join("")
-            }
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <div class="dash-mini-stat" style="background:#f0fdf4;border-color:#bbf7d0">
+                <div class="dash-mini-val" style="color:#14532d">${PACIENTES.filter(p=>p.status==="ativo").length}</div>
+                <div class="dash-mini-lbl">Grupos ativos</div>
+              </div>
+              <div class="dash-mini-stat" style="background:#fffbeb;border-color:#fde68a">
+                <div class="dash-mini-val" style="color:#92400e">${listaAtivos.filter(p=>!(ANAMNESES[p.id]&&ANAMNESES[p.id].status==="finalizada")).length}</div>
+                <div class="dash-mini-lbl">Sem anamnese</div>
+              </div>
+              <div class="dash-mini-stat" style="background:#fef2f2;border-color:#fecaca">
+                <div class="dash-mini-val" style="color:#991b1b">${FALTAS.filter(f=>!f.justificada).length}</div>
+                <div class="dash-mini-lbl">Faltas inj.</div>
+              </div>
+              <div class="dash-mini-stat" style="background:#ede9fe;border-color:#ddd6fe">
+                <div class="dash-mini-val" style="color:#6d28d9">${totalEvs}</div>
+                <div class="dash-mini-lbl">Evoluções</div>
+              </div>
+            </div>
           </div>
         </div>
+
+        <div class="card" style="flex:1">
+          <div class="card-header"><span class="card-title"><i class="bi bi-pie-chart-fill" style="color:#f59e0b"></i> Conformidade CRP</span></div>
+          <div class="card-body" style="padding:8px 14px">
+            <div class="chart-container" style="height:110px"><canvas id="chartAnamneses"></canvas></div>
+          </div>
+        </div>
+
       </div>
+
+      <div class="card" style="flex:none;width:240px;min-width:200px">
+        <div class="card-header"><span class="card-title"><i class="bi bi-calendar-event" style="color:var(--sc-green)"></i> Agenda Hoje</span></div>
+        <div class="card-body" style="padding:8px 12px;max-height:280px;overflow-y:auto">
+          ${
+            agsHoje.length === 0
+              ? '<div style="text-align:center;padding:20px 0;font-size:12px;color:var(--text3)"><i class="bi bi-calendar-x" style="font-size:22px;display:block;margin-bottom:6px"></i>Nenhum atendimento hoje</div>'
+              : agsHoje.slice(0,8).map((ag) => {
+                  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+                  const est = USERS.find(u => u.id === ag.estudanteId);
+                  return '<div class="dash-today-item" onclick="openProntuario(' + ag.pacienteId + ')">' +
+                    '<div class="dash-today-hora">' + ag.hora + '</div>' +
+                    '<div class="dash-today-dot" style="background:#1b5e20"></div>' +
+                    '<div style="flex:1;min-width:0">' +
+                      '<div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHTML(pac?.nome || "—") + '</div>' +
+                      '<div style="font-size:9px;color:var(--text3)">' + escapeHTML(ag.local) + (est ? " · " + escapeHTML(est.nome.split(" ")[0]) : "") + '</div>' +
+                    '</div></div>';
+                }).join("") +
+              (agsHoje.length > 8 ? '<div style="text-align:center;font-size:11px;color:var(--text3);padding:6px 0">+' + (agsHoje.length-8) + ' mais</div>' : '')
+          }
+        </div>
+      </div>
+
     </div>
 
     <div class="dash-row-2" style="margin-bottom:20px">
@@ -1339,6 +3743,22 @@ function _destroyChart(id) {
 let chartTendenciaInst = null;
 let chartEvolucoesInst = null;
 let chartCasosEstudanteInst = null;
+
+// ─────────────────────────────────────────────────────────────
+// renderDashboardCharts()
+// Renderiza todos os gráficos do dashboard após o HTML estar no DOM.
+//
+// Gráficos gerenciais (técnico/supervisor):
+//   chartAtendMes  → linha: atendimentos confirmados x cancelados por mês
+//   chartAnamneses → doughnut: conformidade CRP (anamneses finalizadas/pendentes)
+//
+// Gráfico estudante:
+//   chartMeusCasos → barras horizontais: evoluções por paciente
+//
+// MANUTENÇÃO: para adicionar um gráfico, crie o <canvas> no renderDashboard()
+// e adicione o bloco new Chart() aqui. Use _destroyChart(id) antes para evitar
+// instâncias duplicadas ao navegar.
+// ─────────────────────────────────────────────────────────────
 function renderDashboardCharts() {
   const role = currentUser.papel;
   const meusPacientes = getPacientesPermitidos();
@@ -1347,51 +3767,66 @@ function renderDashboardCharts() {
   const CHART_DEFAULTS = {
     responsive: true,
     maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: { callbacks: {} },
-    },
+    plugins: { legend: { display: false }, tooltip: { callbacks: {} } },
   };
 
-  // ── Gráfico gerencial: Carga por estudante (grouped bar) ─────────────────
-  const ctxCarga = document.getElementById("chartCargaEstudante");
-  if (ctxCarga) {
-    _destroyChart("carga");
-    const estudantes = USERS.filter((u) => u.papel === "estudante");
-    const labels = estudantes.map((e) => e.nome.split(" ")[0]);
-    const dataCasos = estudantes.map(
-      (e) =>
-        PACIENTES.filter(
-          (p) => p.estudantesIds && p.estudantesIds.includes(e.id),
-        ).length,
+  // ── GRÁFICO 1 (gerencial): Atendimentos por mês — linha dupla ───────────
+  // Substitui o gráfico de barras por estudante (ilegível com 50 alunos).
+  // Mostra volume mensal de consultas confirmadas vs. canceladas/faltas.
+  const ctxAtend = document.getElementById("chartAtendMes");
+  if (ctxAtend) {
+    _destroyChart("atendMes");
+
+    // Calcular últimos 6 meses
+    const meses = [];
+    const labMeses = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+    const hoje = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+      meses.push({ y: d.getFullYear(), m: d.getMonth(), label: labMeses[d.getMonth()] + "/" + String(d.getFullYear()).slice(2) });
+    }
+
+    const dataConfirmados = meses.map(({ y, m }) =>
+      AGENDAMENTOS.filter((a) => {
+        const d = new Date(a.data + "T12:00:00");
+        return d.getFullYear() === y && d.getMonth() === m && a.status === "confirmado";
+      }).length
     );
-    const dataEvs = estudantes.map((e) => {
-      let n = 0;
-      PACIENTES.filter(
-        (p) => p.estudantesIds && p.estudantesIds.includes(e.id),
-      ).forEach((p) => {
-        n += (EVOLUCOES[p.id] || []).length;
-      });
-      return n;
-    });
-    _chartInsts["carga"] = new Chart(ctxCarga, {
-      type: "bar",
+    const dataCancelados = meses.map(({ y, m }) =>
+      AGENDAMENTOS.filter((a) => {
+        const d = new Date(a.data + "T12:00:00");
+        return d.getFullYear() === y && d.getMonth() === m &&
+               (a.status === "cancelado" || a.status === "faltou");
+      }).length
+    );
+
+    _chartInsts["atendMes"] = new Chart(ctxAtend, {
+      type: "line",
       data: {
-        labels,
+        labels: meses.map((m) => m.label),
         datasets: [
           {
-            label: "Casos",
-            data: dataCasos,
-            backgroundColor: "#2e7d32",
-            borderRadius: 5,
-            barPercentage: 0.45,
+            label: "Realizados",
+            data: dataConfirmados,
+            borderColor: "#1b5e20",
+            backgroundColor: "rgba(27,94,32,0.08)",
+            tension: 0.35,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            fill: true,
+            borderWidth: 2,
           },
           {
-            label: "Evoluções",
-            data: dataEvs,
-            backgroundColor: "#93c5fd",
-            borderRadius: 5,
-            barPercentage: 0.45,
+            label: "Cancelados/Faltas",
+            data: dataCancelados,
+            borderColor: "#f59e0b",
+            backgroundColor: "rgba(245,158,11,0.07)",
+            tension: 0.35,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            fill: true,
+            borderWidth: 2,
+            borderDash: [5, 4],
           },
         ],
       },
@@ -1399,63 +3834,54 @@ function renderDashboardCharts() {
         ...CHART_DEFAULTS,
         plugins: {
           legend: {
-            display: true,
-            position: "top",
-            align: "end",
-            labels: { usePointStyle: true, padding: 12, font: { size: 11 } },
+            display: true, position: "top", align: "end",
+            labels: { usePointStyle: true, padding: 14, font: { size: 11 } },
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => " " + ctx.dataset.label + ": " + ctx.parsed.y,
+            },
           },
         },
         scales: {
-          y: {
-            beginAtZero: true,
-            ticks: { stepSize: 1 },
-            grid: { color: "#f1f5f1" },
-          },
+          y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: "#f1f5f1" } },
           x: { grid: { display: false } },
         },
       },
     });
-    chartCasosEstudanteInst = _chartInsts["carga"];
   }
 
-  // ── Gráfico gerencial: Status anamneses (doughnut) ───────────────────────
+  // ── GRÁFICO 2 (gerencial): Conformidade CRP — doughnut ──────────────────
   const ctxAnam = document.getElementById("chartAnamneses");
   if (ctxAnam) {
     _destroyChart("anam");
-    let finalizadas = listaAtivos.filter(
-      (p) => ANAMNESES[p.id]?.status === "finalizada",
-    ).length;
+    let finalizadas = listaAtivos.filter((p) => ANAMNESES[p.id]?.status === "finalizada").length;
     let pendentes = listaAtivos.length - finalizadas;
     if (finalizadas === 0 && pendentes === 0) pendentes = 1;
     _chartInsts["anam"] = new Chart(ctxAnam, {
       type: "doughnut",
       data: {
         labels: ["Finalizadas", "Pendentes"],
-        datasets: [
-          {
-            data: [finalizadas, pendentes],
-            backgroundColor: ["#2e7d32", "#f59e0b"],
-            borderWidth: 0,
-            hoverOffset: 4,
-          },
-        ],
+        datasets: [{
+          data: [finalizadas, pendentes],
+          backgroundColor: ["#1b5e20", "#f59e0b"],
+          borderWidth: 0,
+          hoverOffset: 4,
+        }],
       },
       options: {
         ...CHART_DEFAULTS,
-        cutout: "72%",
+        cutout: "68%",
         plugins: {
-          legend: {
-            display: true,
-            position: "bottom",
-            labels: { usePointStyle: true, padding: 10, font: { size: 10 } },
-          },
+          legend: { display: true, position: "bottom", labels: { usePointStyle: true, padding: 8, font: { size: 10 } } },
+          tooltip: { callbacks: { label: (ctx) => " " + ctx.label + ": " + ctx.parsed } },
         },
       },
     });
     chartEvolucoesInst = _chartInsts["anam"];
   }
 
-  // ── Gráfico estudante: Evoluções por caso (horizontal bar) ───────────────
+  // ── GRÁFICO 3 (estudante): Evoluções por caso ────────────────────────────
   const ctxMeusCasos = document.getElementById("chartMeusCasos");
   if (ctxMeusCasos && role === "estudante") {
     _destroyChart("meusCasos");
@@ -1464,24 +3890,18 @@ function renderDashboardCharts() {
       type: "bar",
       data: {
         labels: meusCasos.map((p) => p.nome.split(" ")[0]),
-        datasets: [
-          {
-            label: "Evoluções",
-            data: meusCasos.map((p) => (EVOLUCOES[p.id] || []).length),
-            backgroundColor: meusCasos.map((p) => p.cor || "#2e7d32"),
-            borderRadius: 5,
-          },
-        ],
+        datasets: [{
+          label: "Evoluções",
+          data: meusCasos.map((p) => (EVOLUCOES[p.id] || []).length),
+          backgroundColor: "#1b5e20",
+          borderRadius: 6,
+        }],
       },
       options: {
         ...CHART_DEFAULTS,
         indexAxis: "y",
         scales: {
-          x: {
-            beginAtZero: true,
-            ticks: { stepSize: 1 },
-            grid: { color: "#f1f5f1" },
-          },
+          x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: "#f1f5f1" } },
           y: { grid: { display: false } },
         },
       },
@@ -1541,7 +3961,7 @@ function renderProntuario(pid) {
   const evs = EVOLUCOES[pid] || [],
     docs = DOCUMENTOS[pid] || [];
   return `
-  <div class="back-btn" onclick="navigate('pacientes')"><i class="bi bi-arrow-left"></i> Voltar</div>
+  <button type="button" class="back-btn" onclick="navigate('pacientes')"><i class="bi bi-arrow-left"></i> Voltar</button>
   <div class="patient-profile"><div class="patient-profile-avatar" style="background:${p.cor}">${escapeHTML(p.ini)}</div><div class="patient-profile-info"><h2>${escapeHTML(p.nome)}</h2><p>Caso #${p.id} · ${escapeHTML(p.cpf)} · <span class="badge ${p.status === "ativo" ? "badge-green" : "badge-gray"}">${p.status}</span></p><p style="margin-top:5px;font-size:12px;color:var(--text3)"><i class="bi bi-people"></i> ${escapeHTML(nomesEstudantes)} &nbsp;·&nbsp; <i class="bi bi-person-check"></i> ${sup?.nome}</p></div><div class="patient-profile-meta"><div class="meta-item"><div class="meta-label">Evoluções</div><div class="meta-value">${evs.length}</div></div></div></div>
   <div class="prontuario-tabs"><button class="ptab active" onclick="switchTab(this,'tab-resumo')"><i class="bi bi-grid"></i> Resumo</button><button class="ptab" onclick="switchTab(this,'tab-anamnese')"><i class="bi bi-journal-text"></i> Anamnese</button><button class="ptab" onclick="switchTab(this,'tab-evolucoes')"><i class="bi bi-list-ul"></i> Evoluções</button><button class="ptab" onclick="switchTab(this,'tab-documentos')"><i class="bi bi-paperclip"></i> Docs</button><button class="ptab" onclick="switchTab(this,'tab-agenda')"><i class="bi bi-calendar3"></i> Agenda</button></div>
   <div id="tab-resumo" class="ptab-content active">${renderTabResumo(pid)}</div><div id="tab-anamnese" class="ptab-content">${renderTabAnamnese(pid)}</div><div id="tab-evolucoes" class="ptab-content">${renderTabEvolucoes(pid)}</div><div id="tab-documentos" class="ptab-content">${renderTabDocumentos(pid)}</div><div id="tab-agenda" class="ptab-content">${renderTabAgendaPaciente(pid)}</div>`;
@@ -1609,62 +4029,307 @@ function renderTabDocumentos(pid) {
 }
 
 function renderTabAgendaPaciente(pid) {
-  const ags = AGENDAMENTOS.filter((a) => a.pacienteId === pid);
-  return `<div class="card"><div class="card-header"><span class="card-title">Histórico de Agendamentos</span></div><div class="table-responsive"><table><thead><tr><th>Data</th><th>Hora</th><th>Local</th><th>Status</th></tr></thead><tbody>${ags
+  const ags = AGENDAMENTOS.filter((a) => a.pacienteId === pid)
+    .sort((a, b) => b.data.localeCompare(a.data) || b.hora.localeCompare(a.hora));
+  const canManage = ["tecnico", "supervisor", "estudante", "paciente"].includes(currentUser.papel);
+  const hoje = new Date().toISOString().split("T")[0];
+  const rows = ags.map((ag) => {
+    const isPast = ag.data < hoje;
+    const isCanceled = ag.status === "cancelado";
+    const badgeCls = isCanceled ? "badge-cancel" : ag.status === "faltou" ? "badge-amber" : (ag.status === "confirmado" ? "badge-green" : "badge-amber");
+    const dataFmt = ag.data.split("-").reverse().join("/");
+    const isFaltou = ag.status === "faltou";
+    const faltaInfo = FALTAS.find((f) => f.agId === ag.id);
+    const acoes = (!isCanceled && !isFaltou && canManage)
+      ? `<div class="action-btns" style="flex-wrap:wrap;gap:4px">
+           ${!isPast ? `<button class="btn btn-secondary btn-sm" onclick="openModalEditarAgendamento(${ag.id})" title="Editar agendamento">
+             <i class="bi bi-pencil"></i> Editar
+           </button>` : ""}
+           <button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border:1px solid #f59e0b" onclick="registrarFalta(${ag.id})" title="Registrar falta">
+             <i class="bi bi-person-x"></i> Faltou
+           </button>
+           ${!isPast ? `<button class="btn btn-sm" style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5" onclick="confirmarCancelamentoAgendamento(${ag.id})" title="Cancelar agendamento">
+             <i class="bi bi-x-circle"></i> Cancelar
+           </button>` : ""}
+         </div>`
+      : isFaltou
+        ? `<div style="font-size:11px">
+            <span style="color:#92400e"><i class="bi bi-person-x"></i> Faltou</span>
+            ${faltaInfo && !faltaInfo.justificada && ["tecnico","supervisor"].includes(currentUser.papel)
+              ? `<br><button class="btn btn-sm" style="margin-top:3px;background:#dcfce7;color:#14532d;border:1px solid #86efac" onclick="justificarFalta('${faltaInfo?.id}')"><i class="bi bi-check"></i> Justificar</button>`
+              : faltaInfo?.justificada ? '<span style="color:var(--text3)"> (justificada)</span>' : ""}
+           </div>`
+        : `<span style="font-size:11px;color:var(--text3)">${isPast && !isFaltou ? "Concluído" : "—"}</span>`;
+    return `<tr style="${isCanceled ? "opacity:0.55" : ""}">
+      <td style="font-weight:500">${dataFmt}</td>
+      <td><strong>${escapeHTML(ag.hora)}</strong></td>
+      <td>${escapeHTML(ag.local)}</td>
+      <td><span class="badge ${badgeCls}">${ag.status}</span></td>
+      <td>${acoes}</td>
+    </tr>`;
+  }).join("");
+  const emptyState = ags.length === 0
+    ? `<tr><td colspan="5" style="text-align:center;padding:28px;color:var(--text3)"><i class="bi bi-calendar-x" style="font-size:22px;display:block;margin-bottom:8px"></i>Nenhum agendamento registrado</td></tr>`
+    : "";
+  return `<div class="card">
+    <div class="card-header">
+      <span class="card-title"><i class="bi bi-calendar3" style="color:var(--sc-green)"></i> Agendamentos</span>
+    </div>
+    <div class="table-responsive">
+      <table>
+        <thead><tr><th>Data</th><th>Hora</th><th>Local</th><th>Status</th><th>Ações</th></tr></thead>
+        <tbody>${rows || emptyState}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function _renderProximosList(proximos, hoje) {
+  if (proximos.length === 0)
+    return '<div class="empty-state" style="padding:28px"><i class="bi bi-calendar-x" style="font-size:28px;color:var(--text3)"></i><p style="margin-top:8px;color:var(--text3)">Nenhum atendimento futuro agendado.</p></div>';
+  const rows = proximos
     .map((ag) => {
-      return `<tr><td>${ag.data}</td><td><strong>${ag.hora}</strong></td><td>${escapeHTML(ag.local)}</td><td><span class="badge badge-green">${ag.status}</span></td></tr>`;
+      const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+      const isHj = ag.data === hoje;
+      const dataFmt = ag.data.split("-").reverse().join("/");
+      const hojeSpan = isHj
+        ? '<span style="font-size:10px;background:var(--sc-green);color:#fff;border-radius:3px;padding:1px 5px;margin-right:4px">HOJE</span>'
+        : "";
+      const avatar = `<div class="patient-avatar" style="background:#1b5e20;width:24px;height:24px;font-size:10px">${escapeHTML(pac?.ini || "?")}</div>`;
+      const link = `<button class="dash-link-btn" onclick="openProntuario(${ag.pacienteId})">${escapeHTML(pac?.nome || "—")}</button>`;
+      const isCanceled = ag.status === "cancelado";
+      const badge = badgeAgendamento(ag.status);
+      const acoesCell = !isCanceled
+        ? `<div class="action-btns" style="flex-wrap:nowrap">
+             <button class="btn btn-ghost btn-sm" onclick="openModalEditarAgendamento(${ag.id})" title="Editar"><i class="bi bi-pencil"></i></button>
+             <button class="btn btn-ghost btn-sm" style="color:#dc2626" onclick="confirmarCancelamentoAgendamento(${ag.id})" title="Cancelar"><i class="bi bi-x-circle"></i></button>
+           </div>`
+        : `<span style="font-size:11px;color:var(--text3)">—</span>`;
+      return `<tr style="${isHj ? "background:#f0fdf4" : ""}${isCanceled ? ";opacity:0.55" : ""}">
+      <td style="font-weight:${isHj ? "700" : "400"}">${hojeSpan}${dataFmt}</td>
+      <td style="font-weight:600">${ag.hora}</td>
+      <td><div style="display:flex;align-items:center;gap:8px">${avatar}${link}</div></td>
+      <td style="font-size:12px">${escapeHTML(ag.local)}</td>
+      <td>${badge}</td>
+      <td>${acoesCell}</td>
+    </tr>`;
     })
-    .join("")}</tbody></table></div></div>`;
+    .join("");
+  return `<div class="table-responsive"><table><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Local</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 /* ============================================================  AGENDA  */
-function renderAgenda() {
-  const DAYS = ["Seg", "Ter", "Qua", "Qui", "Sex"],
-    DATES = ["01/06", "02/06", "03/06", "04/06", "05/06"],
-    HOURS = ["08:00", "09:00", "10:00", "14:00", "15:00", "16:00"];
-  const dayMap = {
-    "2026-06-01": 0,
-    "2026-06-02": 1,
-    "2026-06-03": 2,
-    "2026-06-04": 3,
-    "2026-06-05": 4,
-  };
-  const slotMap = {};
-
-  // Utiliza a validação central para filtrar a agenda
-  const meusPacientesIds = getPacientesPermitidos().map((p) => p.id);
-  const meusAgendamentos = AGENDAMENTOS.filter((a) =>
-    meusPacientesIds.includes(a.pacienteId),
+function _agendaGetSemana(offsetSemanas) {
+  const hoje = new Date();
+  const diaSemana = hoje.getDay();
+  const seg = new Date(hoje);
+  seg.setDate(
+    hoje.getDate() - (diaSemana === 0 ? 6 : diaSemana - 1) + offsetSemanas * 7,
   );
+  return Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(seg);
+    d.setDate(seg.getDate() + i);
+    return d.toISOString().split("T")[0];
+  });
+}
 
+let _agendaSemanaOffset = 0;
+
+// ─────────────────────────────────────────────────────────────
+// renderAgenda()
+// Renderiza a view semanal de agendamentos.
+//
+// ESTRUTURA:
+//   - _agendaGetSemana(offset) → array de 5 datas ISO (seg-sex)
+//   - slotMap: dicionário { 'ISO_HH:MM' → { pac, ag } } para O(1)
+//   - headerCols: <th> por dia, destaca hoje em verde escuro
+//   - rows: <tr> por hora, <td> por dia; usa classes CSS da agenda
+//
+// ACESSIBILIDADE:
+//   - Eventos: aria-label com nome + local
+//   - Cancelados: fundo cinza + ícone slash — não depende de cor
+//   - Bordas entre colunas/linhas definidas em CSS (.agenda-table)
+//
+// MANUTENÇÃO:
+//   Para adicionar novos horários, edite o array HOURS abaixo.
+//   Para alterar aparência dos eventos, edite as classes
+//   .agenda-td-slot, .cal-event-accessible, .agenda-ev-* no CSS.
+// ─────────────────────────────────────────────────────────────
+function renderAgenda() {
+  const DIAS_LABEL = ["Seg", "Ter", "Qua", "Qui", "Sex"];
+  // Slots de 30 min das 8h às 17h
+  const HOURS = [
+    "08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30",
+    "13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30",
+  ];
+  const semana = _agendaGetSemana(_agendaSemanaOffset);
+  const hoje = new Date().toISOString().split("T")[0];
+  const MESES = [
+    "jan",
+    "fev",
+    "mar",
+    "abr",
+    "mai",
+    "jun",
+    "jul",
+    "ago",
+    "set",
+    "out",
+    "nov",
+    "dez",
+  ];
+
+  const meusPacientesIds = getPacientesPermitidos().map((p) => p.id);
+  // Para estudante: só agendamentos onde ele é o responsável
+  // Para técnico/supervisor: todos agendamentos dos seus pacientes
+  let meusAgendamentos;
+  if (currentUser.papel === "estudante") {
+    meusAgendamentos = AGENDAMENTOS.filter((a) =>
+      meusPacientesIds.includes(a.pacienteId) && a.estudanteId === currentUser.id
+    );
+  } else {
+    meusAgendamentos = AGENDAMENTOS.filter((a) =>
+      meusPacientesIds.includes(a.pacienteId)
+    );
+  }
+
+  // slotMapMulti: chave "ISO_HH:MM" → array de { pac, ag, estudante }
+  // Permite múltiplos eventos no mesmo slot (diferentes estudantes)
+  const slotMapMulti = {};
   meusAgendamentos.forEach((ag) => {
-    const d = dayMap[ag.data];
-    if (d !== undefined) {
+    if (semana.includes(ag.data)) {
       const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-      if (pac)
-        slotMap[`${d}_${ag.hora}`] = {
-          label: pac.nome.split(" ")[0],
-          hora: ag.hora,
-          cls: "cal-event-blue",
-          ag,
-        };
+      const est = USERS.find((u) => u.id === ag.estudanteId);
+      if (pac) {
+        const key = ag.data + "_" + ag.hora;
+        if (!slotMapMulti[key]) slotMapMulti[key] = [];
+        slotMapMulti[key].push({ pac, ag, est });
+      }
     }
   });
 
-  return `<div class="page-header"><div class="page-header-left"><h1>Agenda</h1><p>Junho e Julho de 2026</p></div>${currentUser.papel === "tecnico" ? `<button class="btn btn-primary" onclick="openModalNovoAgendamento()"><i class="bi bi-plus-lg"></i> Novo agendamento</button>` : ""}</div><div class="card"><div class="table-responsive"><div class="calendar-grid"><div class="cal-header">Hora</div>${DAYS.map((d, i) => `<div class="cal-header">${d}<br><span style="font-size:10px">${DATES[i]}</span></div>`).join("")}${HOURS.map(
-    (h) =>
-      `<div class="cal-hour-label">${h}</div>${DAYS.map((_, di) => {
-        const s = slotMap[`${di}_${h}`];
-        return `<div class="cal-slot">${s ? `<div class="cal-event ${s.cls}" onclick="openProntuario(${s.ag.pacienteId})">${escapeHTML(s.label)}<br>${s.hora}</div>` : ""}</div>`;
-      }).join("")}`,
-  ).join(
-    "",
-  )}</div></div></div><div class="card"><div class="card-header"><span class="card-title">Sua Lista de Agendamentos</span></div><div class="table-responsive"><table><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Status</th></tr></thead><tbody>${meusAgendamentos
-    .map((ag) => {
-      const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-      return `<tr><td>${ag.data}</td><td>${ag.hora}</td><td>${escapeHTML(pac ? pac.nome : "")}</td><td><span class="badge badge-green">${ag.status}</span></td></tr>`;
+  const fmtDia = (iso) => {
+    const parts = iso.split("-");
+    return parseInt(parts[2]) + " " + MESES[parseInt(parts[1]) - 1];
+  };
+  const isHoje = (iso) => iso === hoje;
+
+  const semLabel = fmtDia(semana[0]) + " — " + fmtDia(semana[4]);
+
+  const headerCols = semana
+    .map((iso, i) => {
+      const ativo = isHoje(iso);
+      const dot = ativo
+        ? '<div style="width:6px;height:6px;border-radius:50%;background:#69c96d;margin:3px auto 0"></div>'
+        : "";
+      return (
+        '<th class="agenda-th" style="background:' +
+        (ativo ? "#1b5e20" : "var(--bg)") +
+        '" ' + (ativo ? 'data-today="true"' : '') + '>' +
+        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:' +
+        (ativo ? "#a5d6a7" : "var(--text3)") + '">' +
+        DIAS_LABEL[i] +
+        "</div>" +
+        '<div style="font-size:13px;font-weight:700;color:' +
+        (ativo ? "#ffffff" : "var(--text)") +
+        '">' +
+        fmtDia(iso) +
+        "</div>" +
+        dot +
+        "</th>"
+      );
     })
-    .join("")}</tbody></table></div></div>`;
+    .join("");
+
+  const rows = HOURS.map((hora) => {
+    const cells = semana
+      .map((iso) => {
+        const key = iso + "_" + hora;
+        const evs = slotMapMulti[key] || [];
+        const todayClass = isHoje(iso) ? ' agenda-td-today' : '';
+        if (evs.length > 0) {
+          // Múltiplos eventos no mesmo slot (diferentes estudantes/pacientes)
+          const evCards = evs.map((ev) => {
+            const isCan = ev.ag.status === 'cancelado';
+            const isFaltou = ev.ag.status === 'faltou';
+            const bgStyle = isCan
+              ? 'background:#e5e7eb;border-left:4px solid #9ca3af;'
+              : isFaltou
+                ? 'background:#fef3c7;border-left:4px solid #f59e0b;'
+                : 'background:#1b5e20;border-left:4px solid #69c96d;';
+            const nameColor = (isCan || isFaltou) ? '#374151' : '#ffffff';
+            const localColor = (isCan || isFaltou) ? '#6b7280' : '#a5d6a7';
+            const estNome = ev.est ? ev.est.nome.split(' ')[0] : '';
+            return '<div class="cal-event-accessible" ' +
+              'aria-label="Consulta: ' + escapeHTML(ev.pac.nome) + '" ' +
+              'style="' + bgStyle + 'cursor:default;padding:5px 7px;border-radius:5px;margin:2px 0">' +
+              '<div style="font-weight:700;font-size:11px;color:' + nameColor + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;cursor:pointer" onclick="openProntuario(' + ev.pac.id + ')">' +
+              escapeHTML(ev.pac.nome.split(' ')[0]) +
+              '</div>' +
+              '<div style="font-size:9px;color:' + localColor + ';margin-bottom:2px">' +
+              escapeHTML(ev.ag.local) + (estNome ? ' · ' + escapeHTML(estNome) : '') +
+              '</div>' +
+              (isCan ? '<div class="agenda-ev-canceled-label"><i class="bi bi-slash-circle"></i> cancelado</div>'
+               : isFaltou ? '<div class="agenda-ev-canceled-label" style="color:#92400e"><i class="bi bi-person-x"></i> faltou</div>'
+               : '<div class="agenda-ev-actions">' +
+                   '<button class="agenda-ev-btn" onclick="openModalEditarAgendamento(' + ev.ag.id + ')" title="Editar" aria-label="Editar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-pencil"></i></button>' +
+                   '<button class="agenda-ev-btn agenda-ev-btn-cancel" onclick="confirmarCancelamentoAgendamento(' + ev.ag.id + ')" title="Cancelar" aria-label="Cancelar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-x-circle"></i></button>' +
+                   '</div>') +
+              '</div>';
+          }).join('');
+          return '<td class="agenda-td-slot' + todayClass + '" style="vertical-align:top;padding:3px">' + evCards + '</td>';
+        }
+        return '<td class="agenda-td-slot agenda-td-empty' + todayClass + '"></td>';
+      })
+      .join("");
+    return (
+      '<tr><td class="agenda-td-hour">' +
+      hora +
+      "</td>" +
+      cells +
+      "</tr>"
+    );
+  }).join("");
+
+  const proximos = meusAgendamentos
+    .filter((a) => a.data >= hoje)
+    .sort(
+      (a, b) => a.data.localeCompare(b.data) || a.hora.localeCompare(b.hora),
+    )
+    .slice(0, 8);
+
+  const canAdd = ["tecnico", "supervisor", "estudante"].includes(
+    currentUser.papel,
+  );
+
+  return (
+    '<div class="page-header"><div class="page-header-left"><h1>Agenda</h1></div>' +
+    (canAdd
+      ? '<button class="btn btn-primary" onclick="openModalNovoAgendamento()"><i class="bi bi-plus-lg"></i> Novo Agendamento</button>'
+      : "") +
+    "</div>" +
+    '<div class="card" style="margin-bottom:18px">' +
+    '<div class="card-header" style="gap:12px;flex-wrap:wrap">' +
+    '<button class="btn btn-secondary btn-sm" onclick="_agendaSemanaOffset--;navigate(\'agenda\')" title="Semana anterior"><i class="bi bi-chevron-left"></i></button>' +
+    '<span class="card-title" style="flex:1;text-align:center;font-size:13px">' +
+    semLabel +
+    "</span>" +
+    '<button class="btn btn-ghost btn-sm" onclick="_agendaSemanaOffset=0;navigate(\'agenda\')">Hoje</button>' +
+    '<button class="btn btn-secondary btn-sm" onclick="_agendaSemanaOffset++;navigate(\'agenda\')" title="Próxima semana"><i class="bi bi-chevron-right"></i></button>' +
+    "</div>" +
+    '<div class="agenda-calendar-wrap" style="overflow-x:auto"><table class="agenda-table"> ' +
+    '<thead><tr><th class="agenda-th-corner"></th>' +
+    headerCols +
+    "</tr></thead>" +
+    "<tbody>" +
+    rows +
+    "</tbody>" +
+    "</table></div></div>" +
+    '<div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-list-ul" style="color:var(--sc-green)"></i> Próximos Atendimentos</span></div>' +
+    '<div class="card-body" style="padding:0">' +
+    _renderProximosList(proximos, hoje) +
+    "</div></div>"
+  );
 }
 
 /* ============================================================  ACESSO & USUÁRIOS  */
@@ -1828,7 +4493,8 @@ function renderAuditoria() {
   return `<div class="page-header"><div class="page-header-left"><h1>Trilha de Auditoria</h1></div></div><div class="card"><div class="card-body" style="padding:0 16px">${AUDITORIA.map((a, i) => `<div class="audit-item"><div class="audit-line"><div class="audit-dot" style="background:${a.dot}"></div>${i < AUDITORIA.length - 1 ? '<div class="audit-connector"></div>' : ""}</div><div class="audit-body"><div class="audit-action"><strong>${escapeHTML(a.ator)}</strong> ${escapeHTML(a.acao)} ${a.obj ? `<em>${escapeHTML(a.obj)}</em>` : ""}</div><div class="audit-time">${a.ts}</div></div></div>`).join("")}</div></div>`;
 }
 function renderMeuProntuario() {
-  const pid = 4;
+  // Usa o id do usuário logado (paciente), não hardcoded
+  const pid = currentUser.id;
   const p = PACIENTES.find((x) => x.id === pid);
   const ams = ANAMNESES[pid];
   const evs = EVOLUCOES[pid] || [];
@@ -1925,23 +4591,23 @@ function openModalEvolucao(pid) {
 }
 
 function confirmarSalvarEvolucao(pid) {
-  const content = document.getElementById("ev-content").value.trim();
-  if (!content) return toast("Preencha o conteúdo da evolução!", "error");
-
-  let confirmDiv = document.getElementById("custom-confirm");
-  if (!confirmDiv) {
-    confirmDiv = document.createElement("div");
-    confirmDiv.id = "custom-confirm";
-    confirmDiv.className = "modal-overlay";
-    confirmDiv.style.zIndex = "3000";
-    document.body.appendChild(confirmDiv);
-  }
-  confirmDiv.innerHTML = `<div class="modal" style="max-width: 400px; text-align: center; padding: 24px;" onclick="event.stopPropagation()"><i class="bi bi-exclamation-triangle-fill" style="font-size: 44px; color: var(--amber); margin-bottom: 12px; display: block;"></i><h3 style="margin-bottom: 8px; font-size: 18px; color: var(--text);">Tem certeza?</h3><p style="font-size: 14px; color: var(--text2); margin-bottom: 24px; line-height: 1.5;">Uma vez salva, esta evolução <strong>não poderá ser alterada ou apagada</strong> devido a normas do CRP.</p><div style="display: flex; gap: 10px; justify-content: center;"><button class="btn btn-secondary" onclick="document.getElementById('custom-confirm').classList.add('hidden')">Cancelar</button><button class="btn btn-primary" onclick="executarSalvarEvolucao(${pid})">Sim, confirmar</button></div></div>`;
-  confirmDiv.classList.remove("hidden");
+  const evContent = document.getElementById("ev-content").value.trim();
+  if (!evContent) return toast("Preencha o conteúdo da evolução!", "error");
+  // Remove instância anterior para evitar duplo disparo
+  const existing = document.getElementById("custom-confirm");
+  if (existing) existing.remove();
+  const confirmDiv = document.createElement("div");
+  confirmDiv.id = "custom-confirm";
+  confirmDiv.className = "modal-overlay";
+  confirmDiv.style.cssText =
+    "z-index:3000;display:flex;align-items:center;justify-content:center;padding:15px";
+  confirmDiv.innerHTML = `<div class="modal" style="max-width:400px;text-align:center;padding:28px 24px" onclick="event.stopPropagation()"><i class="bi bi-exclamation-triangle-fill" style="font-size:44px;color:var(--amber);display:block;margin-bottom:14px"></i><h3 style="margin-bottom:8px;font-size:18px">Confirmar Evolução</h3><p style="font-size:13px;color:var(--text2);margin-bottom:24px;line-height:1.6">Uma vez salva, esta evolução <strong>não poderá ser alterada ou apagada</strong>, conforme normas do CRP.</p><div style="display:flex;gap:10px;justify-content:center"><button class="btn btn-secondary" onclick="document.getElementById('custom-confirm').remove()">Cancelar</button><button class="btn btn-primary" onclick="executarSalvarEvolucao(${pid})">Confirmar</button></div></div>`;
+  document.body.appendChild(confirmDiv);
 }
 
 function executarSalvarEvolucao(pid) {
-  document.getElementById("custom-confirm").classList.add("hidden");
+  const conf = document.getElementById("custom-confirm");
+  if (conf) conf.remove();
   const content = document.getElementById("ev-content").value.trim();
   if (!EVOLUCOES[pid]) EVOLUCOES[pid] = [];
   const num = EVOLUCOES[pid].length + 1;
@@ -1959,11 +4625,8 @@ function executarSalvarEvolucao(pid) {
       .map((t) => t.trim())
       .filter(Boolean),
   });
-  logAudit(
-    "evolucao",
-    `Registrou evolução #${num}`,
-    PACIENTES.find((p) => p.id === pid).nome,
-  );
+  const pacNomeEv = PACIENTES.find((p) => p.id === pid)?.nome || "Desconhecido";
+  logAudit("evolucao", `Registrou evolução #${num}`, pacNomeEv);
   saveData();
   closeModal();
   toast("Salvo com sucesso!", "success");
@@ -1974,8 +4637,8 @@ function executarSalvarEvolucao(pid) {
 function openModalUploadDocumento(pid) {
   openModal(
     `Upload de Documento (Simulado)`,
-    `<div class="form-group"><label class="form-label">Nome do ficheiro</label><input type="text" id="up-nome" class="form-control" placeholder="Ex: Laudo_Medico.pdf"></div><div class="form-group"><label class="form-label">Tipo</label><select id="up-tipo" class="form-control"><option value="pdf">PDF</option><option value="img">Imagem</option><option value="docx">Word</option></select></div><div class="form-group"><label class="form-label">Ficheiro</label><input type="file" class="form-control"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarUploadDocumento(${pid})">Enviar Ficheiro</button>`,
+    `<div class="form-group"><label class="form-label">Nome do arquivo</label><input type="text" id="up-nome" class="form-control" placeholder="Ex: Laudo_Medico.pdf"></div><div class="form-group"><label class="form-label">Tipo</label><select id="up-tipo" class="form-control"><option value="pdf">PDF</option><option value="img">Imagem</option><option value="docx">Word</option></select></div><div class="form-group"><label class="form-label">Arquivo</label><input type="file" class="form-control"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarUploadDocumento(${pid})">Enviar Arquivo</button>`,
   );
 }
 function salvarUploadDocumento(pid) {
@@ -2009,6 +4672,21 @@ function openModalAnamnese(pid) {
   );
 }
 function salvarAnamnese(pid, status) {
+  // Guard CRP: anamnese finalizada é imutável
+  const existente = ANAMNESES[pid];
+  if (
+    existente &&
+    existente.status === "finalizada" &&
+    status === "finalizada"
+  ) {
+    toast(
+      "Esta anamnese já foi finalizada e não pode ser alterada (CRP).",
+      "error",
+    );
+    return;
+  }
+  const queixa = document.getElementById("am-queixa").value.trim();
+  if (!queixa) return toast("A queixa principal é obrigatória!", "error");
   ANAMNESES[pid] = {
     queixa: document.getElementById("am-queixa").value,
     historia: document.getElementById("am-historia").value,
@@ -2018,6 +4696,9 @@ function salvarAnamnese(pid, status) {
     hipoteses: document.getElementById("am-hipo").value,
     status,
     rascunho: status === "rascunho",
+    criadoPor: currentUser.nome,
+    criadoEm: existente?.criadoEm || new Date().toISOString(),
+    atualizadoEm: new Date().toISOString(),
   };
   logAudit(
     "anamnese",
@@ -2040,7 +4721,7 @@ function openModalNovoPaciente() {
     .join("");
   openModal(
     '<i class="bi bi-person-plus-fill" style="color:var(--sc-green)"></i> Novo Paciente',
-    `<div class="form-row form-row-2"><div class="form-group"><label class="form-label">Nome completo *</label><input class="form-control" id="np-nome" type="text"></div><div class="form-group"><label class="form-label">CPF *</label><input class="form-control" id="np-cpf" type="text" placeholder="000.000.000-00" oninput="maskCPF(this)"></div></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label">Data de nascimento</label><input class="form-control" id="np-nasc" type="date"></div><div class="form-group"><label class="form-label">Telefone</label><input class="form-control" id="np-tel" type="tel" placeholder="(00) 00000-0000" oninput="maskPhone(this)"></div></div><div class="form-group"><label class="form-label">E-mail</label><input class="form-control" id="np-email" type="email"></div><div class="form-group"><label class="form-label">Supervisor</label><select class="form-control" id="np-sup">${USERS.filter(
+    `<div class="form-row form-row-2"><div class="form-group"><label class="form-label">Nome completo *</label><input class="form-control" id="np-nome" type="text"></div><div class="form-group"><label class="form-label">CPF *</label><input class="form-control" id="np-cpf" type="text" placeholder="000.000.000-00" autocomplete="off" oninput="maskCPF(this)"></div></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label">Data de nascimento</label><input class="form-control" id="np-nasc" type="date"></div><div class="form-group"><label class="form-label">Telefone</label><input class="form-control" id="np-tel" type="tel" placeholder="(00) 00000-0000" oninput="maskPhone(this)"></div></div><div class="form-group"><label class="form-label">E-mail</label><input class="form-control" id="np-email" type="email"></div><div class="form-group"><label class="form-label">Supervisor</label><select class="form-control" id="np-sup">${USERS.filter(
       (u) => u.papel === "supervisor",
     )
       .map((u) => `<option value="${u.id}">${escapeHTML(u.nome)}</option>`)
@@ -2057,24 +4738,34 @@ function salvarNovoPaciente() {
   const email = document.getElementById("np-email").value.trim();
 
   if (!nome) return showError("np-nome", "Informe o nome completo!");
-  if (cpf && !validarCPF(cpf))
-    return showError("np-cpf", "O CPF introduzido não é válido!");
+  if (!cpf) return showError("np-cpf", "CPF é obrigatório!");
+  if (!validarCPF(cpf))
+    return showError("np-cpf", "O CPF informado não é válido!");
+  if (
+    PACIENTES.some((p) => p.cpf.replace(/\D/g, "") === cpf.replace(/\D/g, ""))
+  )
+    return showError("np-cpf", "Já existe um paciente com este CPF!");
   if (email && !validarEmail(email))
-    return showError(
-      "np-email",
-      "O e-mail introduzido tem um formato inválido!",
-    );
+    return showError("np-email", "O e-mail informado tem formato inválido!");
 
   const e1 = parseInt(document.getElementById("np-est1").value);
   const e2 = parseInt(document.getElementById("np-est2").value);
   const e3 = parseInt(document.getElementById("np-est3").value);
   const estudantesIds = [e1, e2, e3].filter((id) => !isNaN(id));
-  const CORES = ["#1b5e20", "#2e7d32", "#388e3c", "#43a047", "#558b2f"];
+  const CORES = [
+    "#1b5e20",
+    "#1b5e20",
+    "#1b5e20",
+    "#1b5e20",
+    "#1b5e20",
+    "#1b5e20",
+    "#1b5e20",
+  ];
   const newId = Date.now();
   PACIENTES.push({
     id: newId,
     nome,
-    cpf: cpf || "000.000.000-00",
+    cpf: cpf || "",
     nascimento: document.getElementById("np-nasc").value || "2000-01-01",
     telefone: document.getElementById("np-tel").value || "",
     email: email || "",
@@ -2124,12 +4815,9 @@ function salvarEdicaoPaciente(pid) {
 
   if (!nome) return showError("ep-nome", "Informe o nome completo!");
   if (cpf && !validarCPF(cpf))
-    return showError("ep-cpf", "O CPF introduzido não é válido!");
+    return showError("ep-cpf", "O CPF informado não é válido!");
   if (email && !validarEmail(email))
-    return showError(
-      "ep-email",
-      "O e-mail introduzido tem um formato inválido!",
-    );
+    return showError("ep-email", "O e-mail informado tem formato inválido!");
 
   p.nome = nome;
   p.cpf = cpf;
@@ -2164,14 +4852,17 @@ function openModalNovoUsuario() {
 function salvarNovoUsuario() {
   const nome = document.getElementById("nu-nome").value.trim();
   const login = document.getElementById("nu-login").value.trim();
-  if (!nome || !login) {
-    toast("Preencha nome e login", "error");
-    return;
-  }
+  const pass = document.getElementById("nu-pass").value.trim();
+  if (!nome) return toast("Informe o nome completo!", "error");
+  if (!login) return toast("Informe o login!", "error");
+  if (!pass || pass.length < 4)
+    return toast("Senha deve ter no mínimo 4 caracteres!", "error");
+  if (USERS.some((u) => u.login === login))
+    return toast("Este login já está em uso!", "error");
   USERS.push({
     id: Date.now(),
     login,
-    pass: document.getElementById("nu-pass").value || "1234",
+    pass: pass,
     nome,
     papel: document.getElementById("nu-role").value,
     avatar: nome
@@ -2200,21 +4891,31 @@ function openModalNovoAgendamento() {
 
 function salvarAgendamento() {
   const pacienteId = parseInt(document.getElementById("ag-pac").value);
+  const agData = document.getElementById("ag-data").value;
+  const agHora = document.getElementById("ag-hora").value;
+  if (!agData) return toast("Selecione a data do agendamento!", "error");
+  if (!agHora) return toast("Selecione o horário do agendamento!", "error");
+  const pac = PACIENTES.find((p) => p.id === pacienteId);
+  const estId = currentUser.papel === "estudante" ? currentUser.id : pac?.estudantesIds?.[0] || null;
+  const supId = currentUser.papel === "supervisor" ? currentUser.id : pac?.supervisorId || null;
+  // Conflito: mesmo paciente + mesmo estudante + mesmo slot
+  const conflito = AGENDAMENTOS.find(
+    (a) => a.pacienteId === pacienteId && a.estudanteId === estId &&
+           a.data === agData && a.hora === agHora && a.status !== "cancelado"
+  );
+  if (conflito) return toast("Já existe um agendamento para este paciente com este estudante neste horário!", "error");
   AGENDAMENTOS.push({
     id: Date.now(),
     pacienteId,
-    estudanteId:
-      currentUser.papel === "estudante"
-        ? currentUser.id
-        : parseInt(document.getElementById("ag-est")?.value) || 3,
-    supervisorId: currentUser.papel === "supervisor" ? currentUser.id : 2,
-    data: document.getElementById("ag-data").value,
-    hora: document.getElementById("ag-hora").value,
-    local: document.getElementById("ag-local").value || "Consultório",
+    estudanteId: estId,
+    supervisorId: supId,
+    data: agData,
+    hora: agHora,
+    local: document.getElementById("ag-local").value.trim() || "Consultório",
     modalidade: "presencial",
     status: "confirmado",
   });
-  const pacNome = PACIENTES.find((p) => p.id === pacienteId)?.nome || "";
+  const pacNome = pac?.nome || "";
   logAudit("agenda", "Criou agendamento", pacNome);
   saveData();
   closeModal();
@@ -2222,7 +4923,539 @@ function salvarAgendamento() {
   navigate("agenda");
 }
 
+/* ============================================================  EDITAR E CANCELAR AGENDAMENTO  */
+
+// ─────────────────────────────────────────────────────────────
+// openModalEditarAgendamento(agId)
+// Abre modal de edição de data/hora/local de um agendamento.
+// Valida: data obrigatória, hora obrigatória, conflito de horário.
+// Auditoria: toda edição é registrada via logAudit().
+// ─────────────────────────────────────────────────────────────
+function openModalEditarAgendamento(agId) {
+  const ag = AGENDAMENTOS.find((a) => a.id === agId);
+  if (!ag) return toast("Agendamento não encontrado.", "error");
+  if (ag.status === "cancelado") return toast("Não é possível editar um agendamento cancelado.", "error");
+
+  openModal(
+    `<i class="bi bi-pencil-square" style="color:var(--sc-green)"></i> Editar Agendamento`,
+    `<div class="form-row form-row-2">
+      <div class="form-group">
+        <label class="form-label">Data *</label>
+        <input type="date" id="eag-data" class="form-control" value="${escapeHTML(ag.data)}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Hora *</label>
+        <input type="time" id="eag-hora" class="form-control" value="${escapeHTML(ag.hora)}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Local</label>
+      <input type="text" id="eag-local" class="form-control" value="${escapeHTML(ag.local)}" placeholder="Ex: Sala 02">
+    </div>
+    <div class="form-group">
+      <div style="padding:10px 14px;background:#fffbeb;border:1px solid #f59e0b;border-radius:7px;font-size:12px;color:#78350f;display:flex;align-items:flex-start;gap:8px">
+        <i class="bi bi-info-circle-fill" style="flex-shrink:0;margin-top:1px;color:#d97706"></i>
+        <span>Alterações serão registradas na trilha de auditoria. O status do agendamento será mantido como <strong>confirmado</strong>.</span>
+      </div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="salvarEdicaoAgendamento(${agId})"><i class="bi bi-check-lg"></i> Salvar Alterações</button>`,
+  );
+}
+
+function salvarEdicaoAgendamento(agId) {
+  const ag = AGENDAMENTOS.find((a) => a.id === agId);
+  if (!ag) return;
+  const novaData = document.getElementById("eag-data").value;
+  const novaHora = document.getElementById("eag-hora").value;
+  const novoLocal = document.getElementById("eag-local").value.trim();
+  if (!novaData) return showError("eag-data", "Informe a nova data!");
+  if (!novaHora) return showError("eag-hora", "Informe o novo horário!");
+
+  // Verifica conflito: mesmo PACIENTE + mesmo estudante + mesmo slot
+  // Dois estudantes diferentes PODEM ter agendamentos no mesmo horário
+  const conflito = AGENDAMENTOS.find(
+    (a) => a.id !== agId && a.pacienteId === ag.pacienteId &&
+           a.estudanteId === ag.estudanteId &&
+           a.data === novaData && a.hora === novaHora && a.status !== "cancelado"
+  );
+  if (conflito) return toast("Já existe um agendamento para este paciente com este estudante neste horário!", "error");
+
+  ag.data = novaData;
+  ag.hora = novaHora;
+  ag.local = novoLocal || "Consultório";
+  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+  logAudit("agenda", "Editou agendamento", pac?.nome || "");
+  saveData();
+  closeModal();
+  toast("Agendamento atualizado!", "success");
+  navigate("agenda");
+}
+
+// ─────────────────────────────────────────────────────────────
+// confirmarCancelamentoAgendamento(agId)
+// Exibe diálogo de confirmação antes de cancelar um agendamento.
+// Cria overlay independente (não usa openModal) para não conflitar
+// com modais já abertos (ex: prontuário com abas).
+// executarCancelamentoAgendamento() faz o cancelamento de fato.
+// ─────────────────────────────────────────────────────────────
+function confirmarCancelamentoAgendamento(agId) {
+  const ag = AGENDAMENTOS.find((a) => a.id === agId);
+  if (!ag) return;
+  if (ag.status === "cancelado") return toast("Este agendamento já está cancelado.", "warning");
+  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+  const dataFmt = ag.data.split("-").reverse().join("/");
+
+  // Remove instância anterior para evitar duplo disparo
+  const existing = document.getElementById("cancel-confirm");
+  if (existing) existing.remove();
+
+  const confirmDiv = document.createElement("div");
+  confirmDiv.id = "cancel-confirm";
+  confirmDiv.className = "modal-overlay";
+  confirmDiv.style.cssText = "z-index:3000;display:flex;align-items:center;justify-content:center;padding:15px";
+  confirmDiv.innerHTML = `
+    <div class="modal" style="max-width:420px;text-align:center;padding:32px 28px" onclick="event.stopPropagation()">
+      <div style="width:56px;height:56px;border-radius:50%;background:#fee2e2;display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
+        <i class="bi bi-calendar-x-fill" style="font-size:26px;color:#dc2626"></i>
+      </div>
+      <h3 style="margin-bottom:8px;font-size:18px;font-weight:700">Cancelar Agendamento?</h3>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:6px;line-height:1.6">
+        <strong>${escapeHTML(pac?.nome || "Paciente")}</strong><br>
+        ${dataFmt} às ${escapeHTML(ag.hora)} · ${escapeHTML(ag.local)}
+      </p>
+      <p style="font-size:12px;color:var(--text3);margin-bottom:24px">
+        O cancelamento será registrado na trilha de auditoria e não poderá ser desfeito.
+      </p>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button class="btn btn-secondary" onclick="document.getElementById('cancel-confirm').remove()">Voltar</button>
+        <button class="btn" style="background:#dc2626;color:#fff" onclick="executarCancelamentoAgendamento(${agId})">
+          <i class="bi bi-x-circle-fill"></i> Confirmar Cancelamento
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(confirmDiv);
+  confirmDiv.addEventListener("click", (e) => { if (e.target === confirmDiv) confirmDiv.remove(); });
+}
+
+function executarCancelamentoAgendamento(agId) {
+  const conf = document.getElementById("cancel-confirm");
+  if (conf) conf.remove();
+  const ag = AGENDAMENTOS.find((a) => a.id === agId);
+  if (!ag) return;
+  ag.status = "cancelado";
+  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+  logAudit("agenda", "Cancelou agendamento", pac?.nome || "");
+  saveData();
+  toast("Agendamento cancelado.", "warning");
+  navigate("agenda");
+}
+
+
+/* ============================================================  SISTEMA DE NOTIFICAÇÕES  */
+// ─────────────────────────────────────────────────────────────
+// NOTIFICAÇÕES DO SININHO
+//
+// Tipos implementados:
+//  1. "evolucao_pendente"   → estudante não registrou evolução 1h após consulta
+//  2. "troca_solicitada"    → técnico: paciente faltou 2x sem justificativa
+//  3. "troca_realizada"     → estudantes: paciente foi trocado
+//  4. "falta_registrada"    → técnico/supervisor: falta registrada no prontuário
+//
+// getNotificacoesAtivas() → calcula notificações em tempo real + persistentes
+// renderNotifPanel()      → HTML do painel do sininho
+// marcarNotifLida(id)     → marca como lida e salva
+// ─────────────────────────────────────────────────────────────
+
+function getNotificacoesAtivas() {
+  if (!currentUser) return [];
+  const notifs = [];
+  const agora = new Date();
+  const hojeISO = agora.toISOString().split("T")[0];
+
+  // ── TIPO 1: Evolução pendente após 1h da consulta (só para estudantes) ──
+  if (currentUser.papel === "estudante") {
+    const meusAgs = AGENDAMENTOS.filter(
+      (a) => a.estudanteId === currentUser.id &&
+             a.status === "confirmado" &&
+             a.data <= hojeISO
+    );
+    meusAgs.forEach((ag) => {
+      // Combinar data + hora para comparar com agora
+      const dtConsulta = new Date(ag.data + "T" + ag.hora + ":00");
+      const diffMs = agora - dtConsulta;
+      const umHora = 60 * 60 * 1000;
+      if (diffMs < umHora) return; // ainda não passou 1h
+
+      const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+      if (!pac) return;
+
+      // Verifica se já há evolução registrada após a consulta
+      const evs = EVOLUCOES[ag.pacienteId] || [];
+      const temEv = evs.some((e) => {
+        const dtEv = new Date(e.data.replace(" ","T"));
+        return dtEv >= dtConsulta;
+      });
+      if (temEv) return; // evolução já registrada
+
+      // Verifica se já há anamnese finalizada (idem)
+      const ams = ANAMNESES[ag.pacienteId];
+      const temAnamnese = ams && ams.status === "finalizada";
+
+      const notifId = "ev_pend_" + ag.id;
+      const jaLida = NOTIFICACOES.find((n) => n.id === notifId && n.lida);
+      if (!jaLida) {
+        notifs.push({
+          id: notifId,
+          tipo: "evolucao_pendente",
+          icone: "bi-exclamation-circle-fill",
+          cor: "#f59e0b",
+          titulo: "Evolução pendente",
+          desc: `Consulta com ${escapeHTML(pac.nome)} em ${ag.data.split("-").reverse().join("/")} às ${ag.hora}. Registre a evolução.`,
+          acao: `openProntuario(${pac.id})`,
+          lida: false,
+          ts: ag.data + " " + ag.hora
+        });
+      }
+    });
+  }
+
+  // ── TIPO 2: Troca de paciente solicitada (só para técnico) ──
+  if (currentUser.papel === "tecnico") {
+    NOTIFICACOES.filter((n) => n.tipo === "troca_solicitada" && !n.lida).forEach((n) => {
+      notifs.push(n);
+    });
+  }
+
+  // ── TIPO 3: Troca realizada — notificar estudantes ──
+  if (currentUser.papel === "estudante") {
+    NOTIFICACOES.filter(
+      (n) => n.tipo === "troca_realizada" && !n.lida &&
+             n.estudantesIds && n.estudantesIds.includes(currentUser.id)
+    ).forEach((n) => {
+      notifs.push(n);
+    });
+  }
+
+  // ── TIPO 4: Falta registrada — notif para supervisor/técnico ──
+  if (currentUser.papel === "tecnico" || currentUser.papel === "supervisor") {
+    NOTIFICACOES.filter(
+      (n) => n.tipo === "falta_registrada" && !n.lida
+    ).forEach((n) => {
+      if (currentUser.papel === "tecnico") notifs.push(n);
+      else {
+        // supervisor: só dos seus pacientes
+        const pac = PACIENTES.find((p) => p.id === n.pacienteId);
+        if (pac && pac.supervisorId === currentUser.id) notifs.push(n);
+      }
+    });
+  }
+
+  return notifs;
+}
+
+function renderNotifPanel() {
+  const notifs = getNotificacoesAtivas();
+  const count = notifs.length;
+
+  // Atualizar o badge do sininho
+  const dot = document.querySelector(".notif-dot");
+  if (dot) {
+    dot.style.display = count > 0 ? "block" : "none";
+    dot.textContent = count > 9 ? "9+" : (count > 0 ? count : "");
+  }
+
+  if (count === 0) {
+    return `<div style="padding:28px 20px;text-align:center;color:var(--text3)">
+      <i class="bi bi-bell-slash" style="font-size:28px;display:block;margin-bottom:10px"></i>
+      Nenhuma notificação pendente.
+    </div>`;
+  }
+
+  return notifs.map((n) => `
+    <div class="notif-item" onclick="acionarNotif('${n.id}','${n.acao || ''}')">
+      <div class="notif-icon" style="background:${n.cor || "#1b5e20"}22;color:${n.cor || "#1b5e20"}">
+        <i class="bi ${n.icone || 'bi-bell-fill'}"></i>
+      </div>
+      <div class="notif-body">
+        <div class="notif-titulo">${n.titulo}</div>
+        <div class="notif-desc">${n.desc}</div>
+        <div class="notif-ts">${n.ts || ""}</div>
+      </div>
+      <button class="notif-dismiss" onclick="event.stopPropagation();marcarNotifLida('${n.id}')"
+        title="Marcar como lida" aria-label="Marcar como lida">
+        <i class="bi bi-x"></i>
+      </button>
+    </div>`).join("");
+}
+
+function toggleNotifPanel() {
+  let panel = document.getElementById("notif-panel");
+  if (panel) {
+    panel.remove();
+    return;
+  }
+  panel = document.createElement("div");
+  panel.id = "notif-panel";
+  panel.className = "notif-panel";
+  panel.innerHTML = `
+    <div class="notif-panel-header">
+      <span><i class="bi bi-bell-fill" style="color:var(--sc-green)"></i> Notificações</span>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('notif-panel').remove()">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="notif-panel-body">${renderNotifPanel()}</div>`;
+
+  // Posicionar abaixo do sininho
+  const bell = document.querySelector(".topbar-icon-btn");
+  const rect = bell ? bell.getBoundingClientRect() : {right:60,top:50};
+  panel.style.position = "fixed";
+  panel.style.top = (rect.bottom + 8) + "px";
+  panel.style.right = "12px";
+  document.body.appendChild(panel);
+
+  // Fechar ao clicar fora
+  setTimeout(() => {
+    document.addEventListener("click", function handler(e) {
+      if (!panel.contains(e.target) && !e.target.closest(".topbar-icon-btn")) {
+        panel.remove();
+        document.removeEventListener("click", handler);
+      }
+    });
+  }, 0);
+}
+
+function marcarNotifLida(notifId) {
+  // Para notifs persistentes: marcar no array NOTIFICACOES
+  const n = NOTIFICACOES.find((x) => x.id === notifId);
+  if (n) { n.lida = true; saveData(); }
+  // Para notifs calculadas (evolucao_pendente): adicionar entrada "lida"
+  else {
+    NOTIFICACOES.push({ id: notifId, tipo: "lida", lida: true });
+    saveData();
+  }
+  // Recriar painel
+  const panel = document.getElementById("notif-panel");
+  if (panel) {
+    const body = panel.querySelector(".notif-panel-body");
+    if (body) body.innerHTML = renderNotifPanel();
+  }
+}
+
+function acionarNotif(notifId, acao) {
+  marcarNotifLida(notifId);
+  const panel = document.getElementById("notif-panel");
+  if (panel) panel.remove();
+  if (acao) {
+    try { eval(acao); } catch(e) { console.warn("Ação de notificação inválida:", e); }
+  }
+}
+
+// Atualiza o badge do sininho a cada 60s (sem recarregar tela)
+function _updateNotifBadge() {
+  const notifs = getNotificacoesAtivas();
+  const count = notifs.length;
+  const dot = document.querySelector(".notif-dot");
+  if (dot) {
+    dot.style.display = count > 0 ? "flex" : "none";
+    dot.textContent = count > 9 ? "9+" : (count > 0 ? String(count) : "");
+  }
+}
+setInterval(_updateNotifBadge, 60000);
+
+
+/* ============================================================  FALTAS E TROCA DE PACIENTE  */
+// ─────────────────────────────────────────────────────────────
+// registrarFalta(agId)
+//   Marca o agendamento como "faltou" e registra na lista FALTAS.
+//   Se o paciente acumular 2 faltas injustificadas → emite notificação
+//   de troca de paciente para os técnicos (sininho deles).
+//
+// justificarFalta(faltaId)
+//   Marca a falta como justificada (não conta para o limite de 2).
+//
+// executarTrocaPaciente(pacienteId)
+//   Técnico confirma a troca: muda status do paciente para "inativo",
+//   notifica os estudantes do grupo.
+// ─────────────────────────────────────────────────────────────
+
+function registrarFalta(agId) {
+  const ag = AGENDAMENTOS.find((a) => a.id === agId);
+  if (!ag) return;
+  if (ag.status === "faltou") return toast("Falta já registrada.", "warning");
+  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+
+  ag.status = "faltou";
+
+  const faltaId = "falta_" + ag.id;
+  FALTAS.push({
+    id: faltaId, agId: ag.id,
+    pacienteId: ag.pacienteId,
+    data: ag.data, hora: ag.hora,
+    justificada: false,
+    estudantesIds: pac?.estudantesIds || [],
+    registradoPor: currentUser.nome,
+    ts: new Date().toISOString()
+  });
+
+  logAudit("falta", "Registrou falta do paciente", pac?.nome || "");
+
+  // Notificar supervisor e técnico
+  NOTIFICACOES.push({
+    id: "notif_falta_" + ag.id,
+    tipo: "falta_registrada",
+    pacienteId: ag.pacienteId,
+    icone: "bi-person-x-fill",
+    cor: "#f59e0b",
+    titulo: "Falta registrada",
+    desc: `${escapeHTML(pac?.nome || "Paciente")} faltou em ${ag.data.split("-").reverse().join("/")} às ${ag.hora}.`,
+    acao: `openProntuario(${ag.pacienteId})`,
+    lida: false,
+    ts: new Date().toLocaleDateString("pt-BR")
+  });
+
+  // Verificar limite: 2 faltas injustificadas → pedir troca
+  const faltasInj = FALTAS.filter(
+    (f) => f.pacienteId === ag.pacienteId && !f.justificada
+  ).length;
+
+  if (faltasInj >= 2) {
+    // Verificar se já tem pedido de troca pendente
+    const jaTem = NOTIFICACOES.some(
+      (n) => n.tipo === "troca_solicitada" && n.pacienteId === ag.pacienteId && !n.lida
+    );
+    if (!jaTem) {
+      NOTIFICACOES.push({
+        id: "troca_" + ag.pacienteId + "_" + Date.now(),
+        tipo: "troca_solicitada",
+        pacienteId: ag.pacienteId,
+        icone: "bi-arrow-left-right",
+        cor: "#dc2626",
+        titulo: "⚠ Troca de paciente recomendada",
+        desc: `${escapeHTML(pac?.nome || "Paciente")} acumulou ${faltasInj} faltas injustificadas. Considere a troca do caso.`,
+        acao: `confirmarTrocaPaciente(${ag.pacienteId})`,
+        lida: false,
+        ts: new Date().toLocaleDateString("pt-BR"),
+        estudantesIds: pac?.estudantesIds || []
+      });
+      toast(`⚠ ${pac?.nome} acumulou 2 faltas. Notificação de troca enviada ao técnico.`, "warning");
+    }
+  }
+
+  saveData();
+  toast("Falta registrada.", "warning");
+  _updateNotifBadge();
+  openProntuario(ag.pacienteId);
+}
+
+function justificarFalta(faltaId) {
+  const f = FALTAS.find((x) => x.id === faltaId);
+  if (!f) return;
+  f.justificada = true;
+  const pac = PACIENTES.find((p) => p.id === f.pacienteId);
+  logAudit("falta", "Justificou falta", pac?.nome || "");
+  saveData();
+  toast("Falta justificada.", "success");
+  openProntuario(f.pacienteId);
+}
+
+function confirmarTrocaPaciente(pacienteId) {
+  const pac = PACIENTES.find((p) => p.id === pacienteId);
+  if (!pac) return;
+  const faltasInj = FALTAS.filter((f) => f.pacienteId === pacienteId && !f.justificada).length;
+
+  // Fechar painel de notificações se aberto
+  const panel = document.getElementById("notif-panel");
+  if (panel) panel.remove();
+
+  const confirmDiv = document.createElement("div");
+  confirmDiv.id = "troca-confirm";
+  confirmDiv.className = "modal-overlay";
+  confirmDiv.style.cssText = "z-index:3100;display:flex;align-items:center;justify-content:center;padding:15px";
+  confirmDiv.innerHTML = `
+    <div class="modal" style="max-width:460px;padding:32px 28px" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:center;margin-bottom:18px">
+        <div style="width:60px;height:60px;border-radius:50%;background:#fee2e2;display:flex;align-items:center;justify-content:center">
+          <i class="bi bi-arrow-left-right" style="font-size:28px;color:#dc2626"></i>
+        </div>
+      </div>
+      <h3 style="text-align:center;margin-bottom:10px;font-size:18px">Confirmar Troca de Paciente?</h3>
+      <p style="text-align:center;font-size:13px;color:var(--text2);margin-bottom:6px">
+        <strong>${escapeHTML(pac.nome)}</strong> — ${faltasInj} faltas injustificadas
+      </p>
+      <p style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:20px;line-height:1.6">
+        O paciente será marcado como <strong>inativo</strong> e os estudantes do grupo serão notificados automaticamente.
+        Esta ação é irreversível e será registrada na trilha de auditoria.
+      </p>
+      <div class="form-group">
+        <label class="form-label">Motivo da troca (opcional)</label>
+        <textarea id="troca-motivo" class="form-control" rows="2" placeholder="Ex: Paciente sinalizou impossibilidade de continuar..."></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:center;margin-top:16px">
+        <button class="btn btn-secondary" onclick="document.getElementById('troca-confirm').remove()">Cancelar</button>
+        <button class="btn" style="background:#dc2626;color:#fff" onclick="executarTrocaPaciente(${pacienteId})">
+          <i class="bi bi-check-lg"></i> Confirmar Troca
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(confirmDiv);
+  confirmDiv.addEventListener("click", (e) => { if (e.target === confirmDiv) confirmDiv.remove(); });
+}
+
+function executarTrocaPaciente(pacienteId) {
+  const confirmEl = document.getElementById("troca-confirm");
+  const motivo = document.getElementById("troca-motivo")?.value || "";
+  if (confirmEl) confirmEl.remove();
+
+  const pac = PACIENTES.find((p) => p.id === pacienteId);
+  if (!pac) return;
+
+  pac.status = "inativo";
+
+  // Cancelar todos os agendamentos futuros do paciente
+  const hojeISO = new Date().toISOString().split("T")[0];
+  AGENDAMENTOS.filter((a) => a.pacienteId === pacienteId && a.data >= hojeISO && a.status === "confirmado")
+    .forEach((a) => { a.status = "cancelado"; });
+
+  // Marcar notificação de troca como lida
+  NOTIFICACOES.filter((n) => n.tipo === "troca_solicitada" && n.pacienteId === pacienteId)
+    .forEach((n) => { n.lida = true; });
+
+  // Notificar os estudantes do grupo
+  const estudantesIds = pac.estudantesIds || [];
+  if (estudantesIds.length > 0) {
+    NOTIFICACOES.push({
+      id: "troca_realizada_" + pacienteId + "_" + Date.now(),
+      tipo: "troca_realizada",
+      pacienteId: pacienteId,
+      estudantesIds: estudantesIds,
+      icone: "bi-person-dash-fill",
+      cor: "#dc2626",
+      titulo: "Troca de paciente confirmada",
+      desc: `O caso de ${escapeHTML(pac.nome)} foi encerrado pelo técnico.${motivo ? " Motivo: " + escapeHTML(motivo) : ""} Aguarde a alocação de um novo paciente.`,
+      acao: "",
+      lida: false,
+      ts: new Date().toLocaleDateString("pt-BR"),
+    });
+  }
+
+  logAudit("troca", "Executou troca de paciente" + (motivo ? ": " + motivo : ""), pac.nome);
+  saveData();
+  toast(`Paciente ${pac.nome} marcado como inativo. Estudantes notificados.`, "success");
+  _updateNotifBadge();
+  navigate("pacientes");
+}
+
 /* ============================================================  TOAST E BUSCA GLOBAL  */
+// ─────────────────────────────────────────────────────────────
+// globalSearch(q)
+// Busca global por nome de paciente ou número de caso.
+// Chamado pelo input da topbar (oninput).
+// Se q tiver 2+ chars: navega para 'pacientes' e aplica filtro.
+// MANUTENÇÃO: para incluir outros tipos de busca (evolucoes,
+//   documentos), adicione a lógica aqui e em renderPacientes.
+// ─────────────────────────────────────────────────────────────
 function globalSearch(q) {
   if (!q || q.length < 2) return;
   const meusPacientes = getPacientesPermitidos();
@@ -2236,6 +5469,12 @@ function globalSearch(q) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// toast(msg, type?, duracao?)
+// Exibe notificação temporária no canto inferior direito.
+// type: 'success' | 'error' | 'warning' | 'info' (padrão)
+// Estilos: .toast, .toast-success, .toast-error, .toast-warning
+// ─────────────────────────────────────────────────────────────
 function toast(msg, type = "info") {
   const ICONS = {
     success: "bi-check-circle-fill",
