@@ -8,6 +8,8 @@
 ![Projeto Real](https://img.shields.io/badge/projeto-institucional%20real-success?style=for-the-badge)
 ![JS](https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 
+### [🔗 **Acessar o projeto rodando**](https://rafaelnazareth.github.io/prontuario/)
+
 </div>
 
 ---
