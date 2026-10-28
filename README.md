@@ -5,9 +5,10 @@
 ### Sistema de prontuário clínico para o Serviço-Escola de Psicologia da Faculdade de Ciências Médicas da Santa Casa de São Paulo
 
 ![Status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow?style=for-the-badge)
-![Testes](https://img.shields.io/badge/testes-75%20passando-success?style=for-the-badge)
+[![Testes](https://img.shields.io/github/actions/workflow/status/RafaelNazareth/prontuario/testes.yml?branch=main&label=testes&style=for-the-badge)](https://github.com/RafaelNazareth/prontuario/actions/workflows/testes.yml)
 ![Projeto Real](https://img.shields.io/badge/projeto-institucional%20real-success?style=for-the-badge)
 ![JS](https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
+![Node.js](https://img.shields.io/badge/Node.js-servidor%20sem%20depend%C3%AAncias-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
 
 ### [🔗 **Acessar o projeto rodando**](https://rafaelnazareth.github.io/prontuario/)
 
@@ -20,6 +21,18 @@
 O **PEP** é um sistema real, sendo desenvolvido para o **Serviço-Escola de Psicologia** da **Faculdade de Ciências Médicas da Santa Casa de São Paulo (FCMSCSP)** — a clínica onde alunos de graduação em Psicologia realizam atendimentos supervisionados. Este repositório é também meu **Trabalho Integrador de Competências** do curso de Análise e Desenvolvimento de Sistemas.
 
 Os dados manipulados são clínicos e sensíveis (contexto de **LGPD**), e os usuários finais — técnicos, supervisores, estudantes e pacientes — não têm formação técnica. Isso influenciou decisões concretas de código, descritas abaixo.
+
+---
+
+## 🖼️ Telas
+
+| Visão geral do supervisor | Prontuário com co-assinatura |
+|---|---|
+| ![Visão geral do supervisor, com indicadores, gráfico de atendimentos e pendências de validação](docs/img/dashboard.png) | ![Aba de evoluções do prontuário, com uma evolução de estagiária aguardando validação do supervisor](docs/img/prontuario.png) |
+
+| Login | Trilha de auditoria |
+|---|---|
+| ![Tela de login com aviso de versão de demonstração e perfis de teste](docs/img/login.png) | ![Trilha de auditoria com verificação de integridade e filtros](docs/img/auditoria.png) |
 
 ---
 
@@ -37,6 +50,8 @@ Os dados manipulados são clínicos e sensíveis (contexto de **LGPD**), e os us
 No GitHub Pages não há servidor, então o sistema entra sozinho em **modo demonstração**. A parte do servidor roda dentro do navegador, com as mesmas regras da versão completa. Os dados são fictícios e as alterações ficam salvas só no navegador de quem está testando; o selo "Demonstração" no topo permite restaurar os dados de exemplo.
 
 **Versão completa (local):** com Node.js 18+, rode `npm run dev` e acesse `http://localhost:5500`. Nesse modo, login, permissões e auditoria rodam no servidor e os dados ficam em `data/db.json`.
+
+**Testes:** `npm test` roda a suíte automatizada (`node:test`) e `npm run lint` roda o ESLint. Os dois rodam também no GitHub Actions a cada envio.
 
 ---
 
@@ -60,7 +75,7 @@ assets/
 server/                      → servidor Node: autenticação, API, auditoria, backup cifrado
 data/seed.json               → dados de demonstração (fictícios)
 scripts/                     → geração de agenda e restauração de backup
-tests/                       → 75 testes automatizados (node:test)
+tests/                       → testes automatizados (node:test)
 docs/                        → guia técnico, conformidade e documentação de arquitetura
 ```
 
@@ -72,7 +87,9 @@ Detalhes de arquitetura, scripts e dados estão no [guia técnico](docs/GUIA_TEC
 
 ## 🔐 Decisões pensadas para dados clínicos reais
 
-O sistema foi revisado contra as normas do **Conselho Federal de Psicologia**, a **LGPD** e o manual de certificação de prontuários eletrônicos da **SBIS**. A matriz completa, com cada requisito, a fonte e onde está no código, está em [docs/CONFORMIDADE.md](docs/CONFORMIDADE.md).
+O sistema foi revisado contra as normas do **Conselho Federal de Psicologia** e a **LGPD**, e usa os requisitos de segurança da **SBIS** para prontuários eletrônicos como referência técnica. **Ele não é certificado pela SBIS.** A matriz completa, com cada requisito, a fonte e onde está no código, está em [docs/CONFORMIDADE.md](docs/CONFORMIDADE.md).
+
+> **Onde estas proteções valem:** na versão com servidor (`npm run dev`). A demonstração online simula as mesmas regras (permissões, co-assinatura, retificação e auditoria), mas roda inteira no navegador e **não protege os dados**, por isso usa apenas dados fictícios.
 
 **Segurança decidida no servidor.**
 - Cada papel recebe só os pacientes que pode ver: o técnico vê todos; o supervisor, os que supervisiona; o estudante, os do seu grupo; o paciente, só o próprio prontuário.
@@ -116,11 +133,12 @@ O sistema foi revisado contra as normas do **Conselho Federal de Psicologia**, a
 - **Documentos psicológicos conforme a Res. CFP 06/2019:**
   - declaração, atestado, relatório, laudo e parecer;
   - impressão com páginas numeradas, protocolo de entrega e devolutiva.
-- **Agenda semanal** até dezembro de 2026, com registro de faltas e troca de paciente.
+- **Agenda semanal** com registro de faltas e troca de paciente (dados de exemplo até dezembro de 2026).
+- **Notificações** de evolução pendente, faltas e trocas, e **busca global** de pacientes.
 - **Encerramento de atendimento** com motivo e encaminhamento.
 - **Gestão de usuários:** inativação em vez de exclusão, CRP e matrícula.
 - **Auditoria:** filtros, exportação CSV e verificação de integridade.
-- **Backup cifrado (AES-256-GCM)** com restauração verificada.
+- **Backup cifrado (AES-256-GCM)** com restauração verificada (versão com servidor).
 - **Interface responsiva.**
 
 ---
