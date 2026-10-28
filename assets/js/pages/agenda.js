@@ -4,42 +4,38 @@
 // ============================================================
 
 import { currentUser, navigate } from "../core/auth.js";
-import { openProntuario } from "./dashboard.js";
-import { confirmarCancelamentoAgendamento, openModalEditarAgendamento, openModalNovoAgendamento } from "../modals/modals.js";
 import { AGENDAMENTOS, PACIENTES, USERS, badgeAgendamento, escapeHTML, getPacientesPermitidos } from "../core/store.js";
+import { can } from "../core/permissions.js";
+import { formatBR, formatLong, weekdayAbbrev } from "../core/dateService.js";
 
 export function _renderProximosList(proximos, hoje) {
   if (proximos.length === 0)
-    return '<div class="empty-state" style="padding:28px"><i class="bi bi-calendar-x" style="font-size:28px;color:var(--text3)"></i><p style="margin-top:8px;color:var(--text3)">Nenhum atendimento futuro agendado.</p></div>';
+    return '<div class="empty-state compact"><i class="bi bi-calendar-x"></i><h3>Nenhum atendimento agendado</h3><p>Novos agendamentos aparecem aqui assim que forem criados.</p></div>';
   const rows = proximos
     .map((ag) => {
       const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
       const isHj = ag.data === hoje;
-      const dataFmt = ag.data.split("-").reverse().join("/");
-      const hojeSpan = isHj
-        ? '<span style="font-size:10px;background:var(--sc-green);color:#fff;border-radius:3px;padding:1px 5px;margin-right:4px">HOJE</span>'
-        : "";
-      const avatar = `<div class="patient-avatar" style="background:#1b5e20;width:24px;height:24px;font-size:10px">${escapeHTML(pac?.ini || "?")}</div>`;
-      const link = `<button class="dash-link-btn" onclick="openProntuario(${ag.pacienteId})">${escapeHTML(pac?.nome || "—")}</button>`;
       const isCanceled = ag.status === "cancelado";
-      const badge = badgeAgendamento(ag.status);
+      const dataCell = isHj
+        ? '<span class="today-mark">Hoje</span>'
+        : `${weekdayAbbrev(ag.data)}, ${formatBR(ag.data)}`;
       const acoesCell = !isCanceled
-        ? `<div class="action-btns" style="flex-wrap:nowrap">
-             <button class="btn btn-ghost btn-sm" onclick="openModalEditarAgendamento(${ag.id})" title="Editar"><i class="bi bi-pencil"></i></button>
-             <button class="btn btn-ghost btn-sm" style="color:#dc2626" onclick="confirmarCancelamentoAgendamento(${ag.id})" title="Cancelar"><i class="bi bi-x-circle"></i></button>
+        ? `<div class="action-btns" style="justify-content:flex-end">
+             <button class="btn btn-ghost btn-sm btn-icon" onclick="openModalEditarAgendamento(${ag.id})" title="Editar" aria-label="Editar agendamento"><i class="bi bi-pencil"></i></button>
+             <button class="btn btn-ghost btn-sm btn-icon" onclick="confirmarCancelamentoAgendamento(${ag.id})" title="Cancelar" aria-label="Cancelar agendamento"><i class="bi bi-x-lg"></i></button>
            </div>`
-        : `<span style="font-size:11px;color:var(--text3)">—</span>`;
-      return `<tr style="${isHj ? "background:#f0fdf4" : ""}${isCanceled ? ";opacity:0.55" : ""}">
-      <td style="font-weight:${isHj ? "700" : "400"}">${hojeSpan}${dataFmt}</td>
-      <td style="font-weight:600">${ag.hora}</td>
-      <td><div style="display:flex;align-items:center;gap:8px">${avatar}${link}</div></td>
-      <td style="font-size:12px">${escapeHTML(ag.local)}</td>
-      <td>${badge}</td>
-      <td>${acoesCell}</td>
+        : "";
+      return `<tr class="${isHj ? "row-today" : ""}${isCanceled ? " row-muted" : ""}">
+      <td class="cell-date">${dataCell}</td>
+      <td class="num">${ag.hora}</td>
+      <td><div class="cell-person"><div class="patient-avatar sm" style="background:${pac?.cor || "#6f7d72"}" aria-hidden="true">${escapeHTML(pac?.ini || "?")}</div><button class="dash-link-btn cell-name" onclick="openProntuario(${ag.pacienteId})">${escapeHTML(pac?.nome || "—")}</button></div></td>
+      <td>${escapeHTML(ag.local)}</td>
+      <td>${badgeAgendamento(ag.status)}</td>
+      <td class="right">${acoesCell}</td>
     </tr>`;
     })
     .join("");
-  return `<div class="table-responsive"><table><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Local</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-responsive"><table><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Local</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 /* ============================================================  AGENDA  */
@@ -65,14 +61,15 @@ export let _agendaSemanaOffset = 0;
 //
 // ESTRUTURA:
 //   - _agendaGetSemana(offset) → array de 5 datas ISO (seg-sex)
-//   - slotMap: dicionário { 'ISO_HH:MM' → { pac, ag } } para O(1)
-//   - headerCols: <th> por dia, destaca hoje em verde escuro
-//   - rows: <tr> por hora, <td> por dia; usa classes CSS da agenda
+//   - slotMapMulti: dicionário { 'ISO_HH:MM' → [{ pac, ag, est }] }
+//   - headerCols: <th> por dia (dia da semana + número), hoje destacado
+//   - rows: <tr> por horário; linha de intervalo entre 11:30 e 13:00
 //
 // ACESSIBILIDADE:
-//   - Eventos: aria-label com nome + local
-//   - Cancelados: fundo cinza + ícone slash — não depende de cor
-//   - Bordas entre colunas/linhas definidas em CSS (.agenda-table)
+//   - Nome do paciente é um <button> (abre o prontuário)
+//   - Cancelado/faltou: texto explícito + estilo — não depende de cor
+//   - Ações de editar/cancelar aparecem no hover/foco (sempre visíveis
+//     em telas de toque)
 //
 // MANUTENÇÃO:
 //   Para adicionar novos horários, edite o array HOURS abaixo.
@@ -88,20 +85,6 @@ export function renderAgenda() {
   ];
   const semana = _agendaGetSemana(_agendaSemanaOffset);
   const hoje = new Date().toISOString().split("T")[0];
-  const MESES = [
-    "jan",
-    "fev",
-    "mar",
-    "abr",
-    "mai",
-    "jun",
-    "jul",
-    "ago",
-    "set",
-    "out",
-    "nov",
-    "dez",
-  ];
 
   const meusPacientesIds = getPacientesPermitidos().map((p) => p.id);
   // Para estudante: só agendamentos onde ele é o responsável
@@ -117,8 +100,6 @@ export function renderAgenda() {
     );
   }
 
-  // slotMapMulti: chave "ISO_HH:MM" → array de { pac, ag, estudante }
-  // Permite múltiplos eventos no mesmo slot (diferentes estudantes)
   const slotMapMulti = {};
   meusAgendamentos.forEach((ag) => {
     if (semana.includes(ag.data)) {
@@ -132,88 +113,68 @@ export function renderAgenda() {
     }
   });
 
-  const fmtDia = (iso) => {
-    const parts = iso.split("-");
-    return parseInt(parts[2]) + " " + MESES[parseInt(parts[1]) - 1];
-  };
   const isHoje = (iso) => iso === hoje;
-
-  const semLabel = fmtDia(semana[0]) + " — " + fmtDia(semana[4]);
+  const diaNum = (iso) => parseInt(iso.split("-")[2], 10);
+  const semLabel = formatLong(semana[0]) + " – " + formatLong(semana[4]) + " de " + semana[4].slice(0, 4);
 
   const headerCols = semana
     .map((iso, i) => {
       const ativo = isHoje(iso);
-      const dot = ativo
-        ? '<div style="width:6px;height:6px;border-radius:50%;background:#69c96d;margin:3px auto 0"></div>'
-        : "";
       return (
-        '<th class="agenda-th" style="background:' +
-        (ativo ? "#1b5e20" : "var(--bg)") +
-        '" ' + (ativo ? 'data-today="true"' : '') + '>' +
-        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:' +
-        (ativo ? "#a5d6a7" : "var(--text3)") + '">' +
-        DIAS_LABEL[i] +
-        "</div>" +
-        '<div style="font-size:13px;font-weight:700;color:' +
-        (ativo ? "#ffffff" : "var(--text)") +
-        '">' +
-        fmtDia(iso) +
-        "</div>" +
-        dot +
+        '<th class="agenda-th"' + (ativo ? ' data-today="true" aria-current="date"' : "") + ">" +
+        '<span class="dow">' + DIAS_LABEL[i] + "</span>" +
+        '<span class="dom">' + diaNum(iso) + "</span>" +
         "</th>"
       );
     })
     .join("");
 
-  const rows = HOURS.map((hora) => {
+  const renderEvento = (ev) => {
+    const isCan = ev.ag.status === "cancelado";
+    const isFaltou = ev.ag.status === "faltou";
+    const estNome = ev.est ? ev.est.nome.split(" ")[0] : "";
+    const estado = isCan ? " is-canceled" : isFaltou ? " is-absent" : "";
+    const meta = isCan
+      ? "Cancelado"
+      : isFaltou
+        ? "Faltou"
+        : escapeHTML(ev.ag.local) + (estNome ? " · " + escapeHTML(estNome) : "");
+    const acoes = !isCan && !isFaltou
+      ? '<div class="agenda-ev-actions">' +
+          '<button class="agenda-ev-btn" onclick="openModalEditarAgendamento(' + ev.ag.id + ')" title="Editar" aria-label="Editar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-pencil"></i></button>' +
+          '<button class="agenda-ev-btn agenda-ev-btn-cancel" onclick="confirmarCancelamentoAgendamento(' + ev.ag.id + ')" title="Cancelar" aria-label="Cancelar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-x-lg"></i></button>' +
+        "</div>"
+      : "";
+    return (
+      '<div class="cal-event-accessible' + estado + '">' +
+      '<button type="button" class="ev-name" onclick="openProntuario(' + ev.pac.id + ')" aria-label="Abrir prontuário de ' + escapeHTML(ev.pac.nome) + ", " + ev.ag.hora + '">' +
+      escapeHTML(ev.pac.nome) +
+      "</button>" +
+      '<span class="ev-meta">' + meta + "</span>" +
+      acoes +
+      "</div>"
+    );
+  };
+
+  let rows = "";
+  HOURS.forEach((hora, idx) => {
+    if (hora === "13:00" && HOURS[idx - 1] === "11:30") {
+      rows += '<tr class="agenda-row-break"><td></td><td colspan="5">Intervalo de almoço</td></tr>';
+    }
+    const isHalf = hora.endsWith(":30");
     const cells = semana
       .map((iso) => {
-        const key = iso + "_" + hora;
-        const evs = slotMapMulti[key] || [];
-        const todayClass = isHoje(iso) ? ' agenda-td-today' : '';
-        if (evs.length > 0) {
-          // Múltiplos eventos no mesmo slot (diferentes estudantes/pacientes)
-          const evCards = evs.map((ev) => {
-            const isCan = ev.ag.status === 'cancelado';
-            const isFaltou = ev.ag.status === 'faltou';
-            const bgStyle = isCan
-              ? 'background:#e5e7eb;border-left:4px solid #9ca3af;'
-              : isFaltou
-                ? 'background:#fef3c7;border-left:4px solid #f59e0b;'
-                : 'background:#1b5e20;border-left:4px solid #69c96d;';
-            const nameColor = (isCan || isFaltou) ? '#374151' : '#ffffff';
-            const localColor = (isCan || isFaltou) ? '#6b7280' : '#a5d6a7';
-            const estNome = ev.est ? ev.est.nome.split(' ')[0] : '';
-            return '<div class="cal-event-accessible" ' +
-              'aria-label="Consulta: ' + escapeHTML(ev.pac.nome) + '" ' +
-              'style="' + bgStyle + 'cursor:default;padding:5px 7px;border-radius:5px;margin:2px 0">' +
-              '<div style="font-weight:700;font-size:11px;color:' + nameColor + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;cursor:pointer" onclick="openProntuario(' + ev.pac.id + ')">' +
-              escapeHTML(ev.pac.nome.split(' ')[0]) +
-              '</div>' +
-              '<div style="font-size:9px;color:' + localColor + ';margin-bottom:2px">' +
-              escapeHTML(ev.ag.local) + (estNome ? ' · ' + escapeHTML(estNome) : '') +
-              '</div>' +
-              (isCan ? '<div class="agenda-ev-canceled-label"><i class="bi bi-slash-circle"></i> cancelado</div>'
-               : isFaltou ? '<div class="agenda-ev-canceled-label" style="color:#92400e"><i class="bi bi-person-x"></i> faltou</div>'
-               : '<div class="agenda-ev-actions">' +
-                   '<button class="agenda-ev-btn" onclick="openModalEditarAgendamento(' + ev.ag.id + ')" title="Editar" aria-label="Editar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-pencil"></i></button>' +
-                   '<button class="agenda-ev-btn agenda-ev-btn-cancel" onclick="confirmarCancelamentoAgendamento(' + ev.ag.id + ')" title="Cancelar" aria-label="Cancelar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-x-circle"></i></button>' +
-                   '</div>') +
-              '</div>';
-          }).join('');
-          return '<td class="agenda-td-slot' + todayClass + '" style="vertical-align:top;padding:3px">' + evCards + '</td>';
-        }
+        const evs = slotMapMulti[iso + "_" + hora] || [];
+        const todayClass = isHoje(iso) ? " agenda-td-today" : "";
+        if (evs.length > 0)
+          return '<td class="agenda-td-slot' + todayClass + '">' + evs.map(renderEvento).join("") + "</td>";
         return '<td class="agenda-td-slot agenda-td-empty' + todayClass + '"></td>';
       })
       .join("");
-    return (
-      '<tr><td class="agenda-td-hour">' +
-      hora +
-      "</td>" +
-      cells +
-      "</tr>"
-    );
-  }).join("");
+    rows +=
+      '<tr class="' + (isHalf ? "agenda-row-half" : "") + '"><td class="agenda-td-hour' + (isHalf ? " is-half" : "") + '">' +
+      hora + "</td>" + cells + "</tr>";
+  });
 
   const proximos = meusAgendamentos
     .filter((a) => a.data >= hoje)
@@ -222,37 +183,39 @@ export function renderAgenda() {
     )
     .slice(0, 8);
 
-  const canAdd = ["tecnico", "supervisor", "estudante"].includes(
-    currentUser.papel,
-  );
+  const canAdd = can("appointment.create");
+  const naSemana = meusAgendamentos.filter(
+    (a) => semana.includes(a.data) && a.status !== "cancelado",
+  ).length;
 
   return (
-    '<div class="page-header"><div class="page-header-left"><h1>Agenda</h1></div>' +
+    '<div class="page-header"><div class="page-header-left"><h1>' +
+    (currentUser.papel === "estudante" ? "Minha agenda" : "Agenda") +
+    "</h1><p>" + naSemana + (naSemana === 1 ? " atendimento" : " atendimentos") + " nesta semana</p></div>" +
     (canAdd
-      ? '<button class="btn btn-primary" onclick="openModalNovoAgendamento()"><i class="bi bi-plus-lg"></i> Novo Agendamento</button>'
+      ? '<button class="btn btn-primary" onclick="openModalNovoAgendamento()"><i class="bi bi-plus-lg"></i> Novo agendamento</button>'
       : "") +
     "</div>" +
-    '<div class="card" style="margin-bottom:18px">' +
-    '<div class="card-header" style="gap:12px;flex-wrap:wrap">' +
-    '<button class="btn btn-secondary btn-sm" onclick="agendaSemanaAnterior()" title="Semana anterior"><i class="bi bi-chevron-left"></i></button>' +
-    '<span class="card-title" style="flex:1;text-align:center;font-size:13px">' +
-    semLabel +
-    "</span>" +
-    '<button class="btn btn-ghost btn-sm" onclick="agendaIrParaHoje()">Hoje</button>' +
-    '<button class="btn btn-secondary btn-sm" onclick="agendaProximaSemana()" title="Próxima semana"><i class="bi bi-chevron-right"></i></button>' +
+    '<section class="card">' +
+    '<div class="card-header agenda-toolbar">' +
+    '<span class="agenda-range">' + semLabel + "</span>" +
+    '<button class="btn btn-secondary btn-sm" onclick="agendaIrParaHoje()"' + (_agendaSemanaOffset === 0 ? " disabled" : "") + ">Hoje</button>" +
+    '<div class="btn-group">' +
+    '<button class="btn btn-secondary btn-sm btn-icon" onclick="agendaSemanaAnterior()" title="Semana anterior" aria-label="Semana anterior"><i class="bi bi-chevron-left"></i></button>' +
+    '<button class="btn btn-secondary btn-sm btn-icon" onclick="agendaProximaSemana()" title="Próxima semana" aria-label="Próxima semana"><i class="bi bi-chevron-right"></i></button>' +
     "</div>" +
-    '<div class="agenda-calendar-wrap" style="overflow-x:auto"><table class="agenda-table"> ' +
+    "</div>" +
+    '<div class="agenda-calendar-wrap"><table class="agenda-table">' +
     '<thead><tr><th class="agenda-th-corner"></th>' +
     headerCols +
     "</tr></thead>" +
     "<tbody>" +
     rows +
     "</tbody>" +
-    "</table></div></div>" +
-    '<div class="card"><div class="card-header"><span class="card-title"><i class="bi bi-list-ul" style="color:var(--sc-green)"></i> Próximos Atendimentos</span></div>' +
-    '<div class="card-body" style="padding:0">' +
+    "</table></div></section>" +
+    '<section class="card"><div class="card-header"><h2 class="card-title">Próximos atendimentos</h2></div>' +
     _renderProximosList(proximos, hoje) +
-    "</div></div>"
+    "</section>"
   );
 }
 

@@ -1,0 +1,10 @@
+node_modules/
+*.log
+.DS_Store
+
+# Dados em uso (gerado a partir de data/seed.json; gravado pelo sistema)
+data/db.json
+data/*.tmp
+data/backups/
+data/.backup-key
+data/db.antes-da-restauracao-*.json

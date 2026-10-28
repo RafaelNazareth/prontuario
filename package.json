@@ -1,0 +1,21 @@
+{
+  "name": "prontuario-pep",
+  "version": "1.0.0",
+  "description": "Sistema de Prontuário Eletrônico Psicológico — Serviço-Escola de Psicologia FCMSCSP",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server/index.mjs",
+    "start": "node server/index.mjs",
+    "data:reset": "node -e \"require('fs').copyFileSync('data/seed.json','data/db.json')\" && echo data/db.json restaurado a partir de data/seed.json",
+    "data:agenda": "node scripts/gerar-agenda.mjs",
+    "data:restaurar": "node scripts/restaurar-backup.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "lint": "eslint assets/js tests server scripts",
+    "format": "prettier --write \"assets/js/**/*.js\" \"tests/**/*.mjs\" \"*.html\" \"assets/css/*.css\" \"server/**/*.mjs\" \"scripts/**/*.mjs\""
+  },
+  "devDependencies": {
+    "eslint": "^10.9.1",
+    "prettier": "^3.9.6"
+  }
+}

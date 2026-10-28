@@ -7,15 +7,17 @@
       name="description"
       content="Sistema de prontuário eletrônico do Serviço-Escola de Psicologia — FCMSCSP"
     />
-    <meta name="theme-color" content="#1b5e20" />
-    <title>PEP — Prontuário Eletrônico | FCMSCSP</title>
+    <meta name="theme-color" content="#0f4c1e" />
+    <title>Prontuário eletrônico · FCMSCSP</title>
 
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css"
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;650;700&display=swap"
       rel="stylesheet"
     />
 
@@ -23,11 +25,11 @@
   </head>
   <body>
     <div id="login-page">
-      <div class="login-left">
+      <aside class="login-left">
         <div class="login-logo-wrap">
           <img
             src="https://fcmsantacasasp.edu.br/vemprasanta/wp-content/themes/fcm-new/assets/imgs/logo.png"
-            alt="Santa Casa SP"
+            alt="Faculdade de Ciências Médicas da Santa Casa de São Paulo"
             class="login-logo-img"
             onerror="
               this.style.display = 'none';
@@ -40,7 +42,7 @@
             style="display: none"
           >
             <div class="login-logo-icon">
-              <i class="bi bi-plus-circle-fill"></i>
+              <i class="bi bi-plus-lg"></i>
             </div>
             <div class="login-logo-text">
               FCMSCSP<small
@@ -50,123 +52,108 @@
           </div>
         </div>
         <div class="login-body">
-          <div class="login-eyebrow">
-            <i class="bi bi-hospital-fill"></i> Serviço-Escola · Psicologia
-          </div>
-          <h1 class="login-headline">
-            Cuidar começa<br /><em>com escuta.</em>
-          </h1>
+          <p class="login-kicker">Serviço-Escola de Psicologia</p>
+          <h1 class="login-headline">Prontuário eletrônico psicológico</h1>
           <p class="login-desc">
-            Sistema de prontuário eletrônico do Serviço-Escola do Curso de
-            Psicologia — Faculdade de Ciências Médicas da Santa Casa de São
-            Paulo.
+            Anamneses, evoluções, agenda e documentos dos atendimentos do
+            Serviço-Escola, num só registro e com trilha de auditoria.
           </p>
         </div>
         <div class="login-footer">
           <span>FCMSCSP © 2026</span>
-          <span>PEP v1.0 MVP</span>
+          <span>Versão 1.1 · LGPD e Res. CFP 001/2009</span>
         </div>
-      </div>
-      <div class="login-right">
+      </aside>
+
+      <main class="login-right">
         <div class="login-card">
-          <div class="login-card-badge">
-            <i class="bi bi-shield-lock-fill"></i> Acesso institucional restrito
+          <div class="login-mobile-brand">
+            <div class="mark"><i class="bi bi-plus-lg"></i></div>
+            <div>
+              <strong>Prontuário eletrônico</strong>Serviço-Escola de Psicologia
+              · FCMSCSP
+            </div>
           </div>
-          <h2 class="login-title">Bem-vindo!</h2>
+          <h2 class="login-title">Entrar</h2>
           <p class="login-subtitle">
-            Insira suas credenciais para acessar o sistema de prontuário.
+            Use o login e a senha institucionais fornecidos pela coordenação.
           </p>
           <div class="login-input-group">
-            <label class="login-label">Usuário</label>
+            <label class="login-label" for="login-user">Usuário</label>
             <div class="login-input-wrap">
               <i class="bi bi-person ico"></i>
               <input
                 type="text"
                 id="login-user"
-                placeholder="Digite seu login"
+                placeholder="seu.login"
                 autocomplete="off"
+                spellcheck="false"
               />
             </div>
           </div>
           <div class="login-input-group">
-            <label class="login-label">Senha</label>
+            <label class="login-label" for="login-pass">Senha</label>
             <div class="login-input-wrap">
               <i class="bi bi-lock ico"></i>
               <input
                 type="password"
                 id="login-pass"
-                placeholder="Digite sua senha"
+                placeholder="••••••••"
+                autocomplete="off"
               />
               <i
                 class="bi bi-eye toggle-pw"
                 id="toggle-pw-icon"
-                onclick="togglePw()"
+                role="button"
+                tabindex="0"
+                aria-label="Mostrar ou ocultar senha"
               ></i>
             </div>
           </div>
           <div class="login-options">
-            <label class="login-check"
-              ><input type="checkbox" id="remember-me" /><span
-                >Lembrar acesso</span
-              ></label
-            >
-            <a href="#" class="login-forgot">Esqueci a senha</a>
+              <a href="#" class="login-forgot" id="link-aviso-privacidade">Aviso de privacidade</a>
+            <span class="login-help">Esqueceu a senha? Procure o técnico responsável.</span>
           </div>
           <button
             type="button"
             class="btn-login"
-            onclick="doLogin()"
+            id="btn-login"
             aria-label="Entrar no sistema"
           >
             <i class="bi bi-box-arrow-in-right"></i><span>Entrar</span>
           </button>
-          <div class="login-error" id="login-error">
+          <div class="login-error" id="login-error" role="alert">
             <i class="bi bi-exclamation-circle"></i> Usuário ou senha
-            incorretos.
+            incorretos. Confira e tente de novo.
           </div>
           <hr class="login-divider" />
-          <div class="login-hint-box">
+          <div class="login-hint-box" id="login-hint-box">
             <div class="login-hint-title">
-              Logins de teste (clique para preencher)
+              Ambiente de demonstração: escolha um perfil para preencher
             </div>
-            <div class="login-hint-row">
-              <span>Psicólogo Técnico</span
-              ><code onclick="fillLogin('tecnico', '1234')"
-                >tecnico / 1234</code
-              >
-            </div>
-            <div class="login-hint-row">
-              <span>Supervisor</span
-              ><code onclick="fillLogin('supervisor', '1234')"
-                >supervisor / 1234</code
-              >
-            </div>
-            <div class="login-hint-row">
-              <span>Estudante</span
-              ><code onclick="fillLogin('estudante', '1234')"
-                >estudante / 1234</code
-              >
-            </div>
-            <div class="login-hint-row">
-              <span>Paciente</span
-              ><code onclick="fillLogin('paciente', '1234')"
-                >paciente / 1234</code
-              >
+            <div class="login-hint-list">
+              <button type="button" class="login-hint-fill" data-login="tecnico" data-pass="1234">
+                <strong>Psicólogo técnico</strong><span>tecnico / 1234</span>
+              </button>
+              <button type="button" class="login-hint-fill" data-login="supervisor" data-pass="1234">
+                <strong>Supervisor</strong><span>supervisor / 1234</span>
+              </button>
+              <button type="button" class="login-hint-fill" data-login="estudante" data-pass="1234">
+                <strong>Estudante</strong><span>estudante / 1234</span>
+              </button>
+              <button type="button" class="login-hint-fill" data-login="paciente" data-pass="1234">
+                <strong>Paciente</strong><span>paciente / 1234</span>
+              </button>
             </div>
           </div>
         </div>
-      </div>
+      </main>
     </div>
 
     <div id="app" class="hidden">
-      <div
-        class="sidebar-overlay"
-        id="sidebar-overlay"
-        onclick="toggleMenu()"
-      ></div>
+      <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
       <aside class="sidebar" id="sidebar">
-        <!-- Logo institucional -->
         <div class="sidebar-logo">
           <img
             src="https://fcmsantacasasp.edu.br/vemprasanta/wp-content/themes/fcm-new/assets/imgs/logo.png"
@@ -184,115 +171,98 @@
             style="display: none"
           >
             <div class="sidebar-logo-icon">
-              <i class="bi bi-plus-circle-fill"></i>
+              <i class="bi bi-plus-lg"></i>
             </div>
-            <div class="sidebar-logo-text">
-              FCMSCSP<small>Serviço-Escola · Psicologia</small>
-            </div>
+            <div class="sidebar-logo-text">FCMSCSP</div>
           </div>
         </div>
 
-        <!-- Contexto do usuário logado (card no topo) -->
-        <div class="sidebar-context" id="sb-context">
-          <div class="sidebar-ctx-avatar" id="sb-avatar">T</div>
-          <div class="sidebar-ctx-info">
-            <div class="sidebar-ctx-name" id="sb-name">Usuário</div>
-            <span class="sidebar-ctx-role" id="sb-role">Papel</span>
-          </div>
+        <div class="sidebar-product">
+          <strong>Prontuário eletrônico</strong>Serviço-Escola de Psicologia
         </div>
 
-        <!-- Navegação gerada por JS -->
-        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+        <nav class="sidebar-nav" id="sidebar-nav" aria-label="Navegação principal"></nav>
 
-        <!-- Rodapé -->
         <div class="sidebar-footer">
-          <div class="sidebar-version">
-            <span class="sidebar-version-label"
-              ><i class="bi bi-circle-fill"></i> PEP Sistema</span
-            >
-            <span class="sidebar-version-tag">v1.0 MVP</span>
-          </div>
           <div class="sidebar-user">
             <div class="sidebar-avatar" id="sb-avatar-footer">T</div>
             <div class="sidebar-user-info">
               <div class="sidebar-user-name" id="sb-name-footer">Usuário</div>
-              <div class="sidebar-user-role">FCMSCSP · 2026</div>
+              <span class="sidebar-user-role" id="sb-role">Papel</span>
             </div>
-            <div
+            <button
+              type="button"
               class="sidebar-logout"
-              onclick="doLogout()"
-              title="Sair do sistema"
-              role="button"
+              id="sidebar-senha"
+              title="Alterar senha"
+              aria-label="Alterar senha"
+            >
+              <i class="bi bi-key"></i>
+            </button>
+            <button
+              type="button"
+              class="sidebar-logout"
+              id="sidebar-logout"
+              title="Sair"
               aria-label="Sair do sistema"
             >
               <i class="bi bi-box-arrow-right"></i>
-            </div>
+            </button>
           </div>
         </div>
       </aside>
 
       <div class="main-wrap">
-        <div class="topbar">
+        <header class="topbar">
           <button
             type="button"
             class="menu-toggle"
-            onclick="toggleMenu()"
+            id="menu-toggle"
             aria-label="Abrir menu de navegação"
           >
             <i class="bi bi-list"></i>
           </button>
-          <div class="topbar-title" id="topbar-title">Dashboard</div>
+          <div class="topbar-title" id="topbar-title">Início</div>
           <div class="topbar-search">
             <div class="topbar-search-wrap">
               <i class="bi bi-search"></i>
               <input
-                type="text"
-                placeholder="Buscar paciente ou caso..."
+                type="search"
+                placeholder="Buscar paciente pelo nome"
                 id="global-search"
-                oninput="globalSearch(this.value)"
+                aria-label="Buscar paciente pelo nome"
               />
             </div>
           </div>
           <div class="topbar-actions">
             <div
               class="topbar-icon-btn"
+              id="notif-bell-btn"
               title="Notificações"
               role="button"
               aria-label="Notificações"
               tabindex="0"
-              onclick="toggleNotifPanel()"
-              onkeydown="if(event.key==='Enter')toggleNotifPanel()"
             >
               <i class="bi bi-bell" aria-hidden="true"></i
-              ><span class="notif-dot" style="display:none"></span>
-            </div>
-            <div
-              class="topbar-icon-btn"
-              title="Ajuda"
-              role="button"
-              aria-label="Ajuda"
-              tabindex="0"
-            >
-              <i class="bi bi-question-circle" aria-hidden="true"></i>
+              ><span class="notif-dot" style="display: none"></span>
             </div>
           </div>
-        </div>
-        <div class="page-content" id="page-content"></div>
+        </header>
+        <main class="page-content" id="page-content"></main>
       </div>
     </div>
 
     <div
       class="modal-overlay hidden"
       id="modal-overlay"
-      onclick="closeModal(event)"
     >
-      <div class="modal" id="modal-box" onclick="event.stopPropagation()">
+      <div class="modal" id="modal-box">
         <div class="modal-header">
           <div class="modal-title" id="modal-title">Modal</div>
           <button
             type="button"
             class="modal-close"
-            onclick="closeModal()"
+            id="modal-close-btn"
             aria-label="Fechar modal"
           >
             <i class="bi bi-x-lg"></i>
@@ -305,7 +275,62 @@
 
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="./assets/js/main.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+    <!--
+      Rede de segurança de carregamento de módulo ES.
+      Se o app for aberto via duplo clique (protocolo file://), o navegador
+      bloqueia o carregamento de <script type="module"> por política de CORS
+      (file:// não é uma origem HTTP válida para fetch de módulos). Nesse
+      caso, main.js nunca executa, nenhuma função fica disponível em window,
+      e todo onclick falha silenciosamente. Este bloco detecta esse cenário
+      e orienta o usuário a rodar um servidor local, em vez de deixar a
+      aplicação parecer "travada" sem explicação.
+    -->
+    <script>
+      (function () {
+        function showModuleLoadError() {
+          if (document.getElementById("module-load-error")) return;
+          var isFileProtocol = window.location.protocol === "file:";
+          var box = document.createElement("div");
+          box.id = "module-load-error";
+          box.setAttribute("role", "alert");
+          box.style.cssText =
+            "position:fixed;inset:0;z-index:99999;background:#0f4c1e;color:#eef7ef;" +
+            "display:flex;align-items:center;justify-content:center;padding:24px;" +
+            "font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;text-align:left;";
+          box.innerHTML =
+            '<div style="max-width:560px;background:#0b3a17;border:1px solid #1b5e20;' +
+            'border-radius:12px;padding:28px 32px;box-shadow:0 20px 60px rgba(0,0,0,.5);">' +
+            '<h2 style="margin:0 0 12px;font-size:19px;color:#7fd399;">Não foi possível carregar o sistema</h2>' +
+            '<p style="margin:0 0 12px;line-height:1.55;font-size:14.5px;">' +
+            (isFileProtocol
+              ? "Este arquivo foi aberto diretamente no navegador (endereço começando com <code>file://</code>). Por segurança, os navegadores bloqueiam o carregamento de módulos JavaScript (ES Modules) nesse modo, então nenhum botão da página funciona."
+              : "O navegador bloqueou ou não conseguiu carregar os módulos JavaScript da aplicação.") +
+            "</p>" +
+            '<p style="margin:0 0 6px;line-height:1.55;font-size:14.5px;"><strong>Como resolver:</strong> inicie o servidor do projeto (requer Node.js), que também lê e grava os dados em <code>data/db.json</code>:</p>' +
+            '<pre style="margin:0 0 12px;background:#0f4c1e;border:1px solid #1e4a2a;border-radius:8px;padding:10px 12px;font-size:13px;overflow:auto;">npm run dev</pre>' +
+            '<p style="margin:0;line-height:1.55;font-size:13.5px;opacity:.85;">Depois acesse <code>http://localhost:5500</code> (ou a porta exibida no terminal) no navegador.</p>' +
+            "</div>";
+          document.body.appendChild(box);
+        }
+
+        // Se o script do módulo falhar ao carregar (bloqueio de rede/CORS/404),
+        // o próprio elemento <script type="module"> dispara um evento "error".
+        window.__pepModuleLoadFailed = showModuleLoadError;
+
+        // Rede de segurança adicional: se depois de um tempo razoável o boot
+        // do módulo não sinalizar sucesso (window.__PEP_BOOTED__), assume-se
+        // falha silenciosa e o aviso é exibido mesmo assim.
+        window.__PEP_BOOT_TIMEOUT__ = setTimeout(function () {
+          if (!window.__PEP_BOOTED__) showModuleLoadError();
+        }, 15000);
+      })();
+    </script>
+    <script
+      type="module"
+      src="./assets/js/main.js"
+      onerror="window.__pepModuleLoadFailed()"
+    ></script>
   </body>
 </html>

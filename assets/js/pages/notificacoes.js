@@ -5,9 +5,13 @@
 
 import { currentUser, navigate } from "../core/auth.js";
 import { openProntuario } from "./dashboard.js";
-import { renderPacientes } from "./pacientes.js";
-import { AGENDAMENTOS, ANAMNESES, EVOLUCOES, FALTAS, NOTIFICACOES, PACIENTES, escapeHTML, logAudit, saveData } from "../core/store.js";
-import { globalSearch, toast } from "../core/utils.js";
+import { AGENDAMENTOS, EVOLUCOES, FALTAS, NOTIFICACOES, PACIENTES, escapeHTML, logAudit, saveData } from "../core/store.js";
+import { toast } from "../core/utils.js";
+import { absenceRepository } from "../repositories/absenceRepository.js";
+import { notificationRepository } from "../repositories/notificationRepository.js";
+import { appointmentRepository } from "../repositories/appointmentRepository.js";
+import { NotificationType, AppointmentStatus } from "../core/enums.js";
+import { today, formatBR } from "../core/dateService.js";
 
 export function getNotificacoesAtivas() {
   if (!currentUser) return [];
@@ -40,10 +44,6 @@ export function getNotificacoesAtivas() {
       });
       if (temEv) return; // evolução já registrada
 
-      // Verifica se já há anamnese finalizada (idem)
-      const ams = ANAMNESES[ag.pacienteId];
-      const temAnamnese = ams && ams.status === "finalizada";
-
       const notifId = "ev_pend_" + ag.id;
       const jaLida = NOTIFICACOES.find((n) => n.id === notifId && n.lida);
       if (!jaLida) {
@@ -53,8 +53,9 @@ export function getNotificacoesAtivas() {
           icone: "bi-exclamation-circle-fill",
           cor: "#f59e0b",
           titulo: "Evolução pendente",
-          desc: `Consulta com ${escapeHTML(pac.nome)} em ${ag.data.split("-").reverse().join("/")} às ${ag.hora}. Registre a evolução.`,
-          acao: `openProntuario(${pac.id})`,
+          desc: `Consulta com ${escapeHTML(pac.nome)} em ${formatBR(ag.data)} às ${ag.hora}. Registre a evolução.`,
+          tipoAcao: "OPEN_PRONTUARIO",
+          pacienteId: pac.id,
           lida: false,
           ts: ag.data + " " + ag.hora
         });
@@ -108,15 +109,15 @@ export function renderNotifPanel() {
   }
 
   if (count === 0) {
-    return `<div style="padding:28px 20px;text-align:center;color:var(--text3)">
-      <i class="bi bi-bell-slash" style="font-size:28px;display:block;margin-bottom:10px"></i>
-      Nenhuma notificação pendente.
+    return `<div class="notif-empty">
+      <i class="bi bi-bell"></i>
+      Nada novo por aqui.
     </div>`;
   }
 
   return notifs.map((n) => `
-    <div class="notif-item" onclick="acionarNotif('${n.id}','${n.acao || ''}')">
-      <div class="notif-icon" style="background:${n.cor || "#1b5e20"}22;color:${n.cor || "#1b5e20"}">
+    <div class="notif-item" onclick="acionarNotif('${n.id}')">
+      <div class="notif-icon" style="background:${n.cor || "#1a6b2e"}1a;color:${n.cor || "#1a6b2e"}">
         <i class="bi ${n.icone || 'bi-bell-fill'}"></i>
       </div>
       <div class="notif-body">
@@ -142,8 +143,8 @@ export function toggleNotifPanel() {
   panel.className = "notif-panel";
   panel.innerHTML = `
     <div class="notif-panel-header">
-      <span><i class="bi bi-bell-fill" style="color:var(--sc-green)"></i> Notificações</span>
-      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('notif-panel').remove()">
+      <span>Notificações</span>
+      <button class="btn btn-ghost btn-sm btn-icon" aria-label="Fechar notificações" onclick="document.getElementById('notif-panel').remove()">
         <i class="bi bi-x-lg"></i>
       </button>
     </div>
@@ -169,14 +170,7 @@ export function toggleNotifPanel() {
 }
 
 export function marcarNotifLida(notifId) {
-  // Para notifs persistentes: marcar no array NOTIFICACOES
-  const n = NOTIFICACOES.find((x) => x.id === notifId);
-  if (n) { n.lida = true; saveData(); }
-  // Para notifs calculadas (evolucao_pendente): adicionar entrada "lida"
-  else {
-    NOTIFICACOES.push({ id: notifId, tipo: "lida", lida: true });
-    saveData();
-  }
+  notificationRepository.markRead(notifId);
   // Recriar painel
   const panel = document.getElementById("notif-panel");
   if (panel) {
@@ -185,12 +179,23 @@ export function marcarNotifLida(notifId) {
   }
 }
 
-export function acionarNotif(notifId, acao) {
+export function acionarNotif(notifId) {
+  const notifsAtivas = getNotificacoesAtivas();
+  const notif = notifsAtivas.find((n) => n.id === notifId) || NOTIFICACOES.find((n) => n.id === notifId);
+
   marcarNotifLida(notifId);
   const panel = document.getElementById("notif-panel");
   if (panel) panel.remove();
-  if (acao) {
-    try { eval(acao); } catch(e) { console.warn("Ação de notificação inválida:", e); }
+
+  if (!notif) return;
+
+  // Despachante seguro sem uso de eval()
+  if (notif.tipoAcao === "OPEN_PRONTUARIO" && notif.pacienteId) {
+    openProntuario(notif.pacienteId);
+  } else if (notif.tipoAcao === "CONFIRMAR_TROCA" && notif.pacienteId) {
+    confirmarTrocaPaciente(notif.pacienteId);
+  } else if (notif.pacienteId) {
+    openProntuario(notif.pacienteId);
   }
 }
 
@@ -204,7 +209,19 @@ export function _updateNotifBadge() {
     dot.textContent = count > 9 ? "9+" : (count > 0 ? String(count) : "");
   }
 }
-setInterval(_updateNotifBadge, 60000);
+// Chamada por auth.js::initApp() após o primeiro login/restauração de sessão
+// — não no carregamento do módulo. Um setInterval solto no topo do módulo
+// (como era antes) roda mesmo antes de qualquer usuário logar e, mais
+// importante, torna impossível importar este arquivo (mesmo indiretamente)
+// em testes automatizados sem travar o processo por causa do timer aberto.
+// A guarda evita criar um segundo interval se initApp() rodar de novo
+// (ex.: logout seguido de novo login na mesma sessão do navegador).
+let _pollingStarted = false;
+export function startNotifBadgePolling() {
+  if (_pollingStarted) return;
+  _pollingStarted = true;
+  setInterval(_updateNotifBadge, 60000);
+}
 
 
 /* ============================================================  FALTAS E TROCA DE PACIENTE  */
@@ -225,67 +242,60 @@ setInterval(_updateNotifBadge, 60000);
 export function registrarFalta(agId) {
   const ag = AGENDAMENTOS.find((a) => a.id === agId);
   if (!ag) return;
-  if (ag.status === "faltou") return toast("Falta já registrada.", "warning");
+  if (ag.status === AppointmentStatus.FALTOU) return toast("Falta já registrada.", "warning");
   const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
 
-  ag.status = "faltou";
+  appointmentRepository.update(ag.id, { status: AppointmentStatus.FALTOU });
 
-  const faltaId = "falta_" + ag.id;
-  FALTAS.push({
-    id: faltaId, agId: ag.id,
-    pacienteId: ag.pacienteId,
-    data: ag.data, hora: ag.hora,
-    justificada: false,
-    estudantesIds: pac?.estudantesIds || [],
-    registradoPor: currentUser.nome,
-    ts: new Date().toISOString()
-  });
-
-  logAudit("falta", "Registrou falta do paciente", pac?.nome || "");
+  absenceRepository.register(
+    {
+      agId: ag.id,
+      pacienteId: ag.pacienteId,
+      data: ag.data,
+      hora: ag.hora,
+      estudantesIds: pac?.estudantesIds || [],
+      registradoPor: currentUser.nome,
+    },
+    pac?.nome,
+  );
 
   // Notificar supervisor e técnico
-  NOTIFICACOES.push({
+  notificationRepository.push({
     id: "notif_falta_" + ag.id,
-    tipo: "falta_registrada",
+    tipo: NotificationType.FALTA_REGISTRADA,
     pacienteId: ag.pacienteId,
     icone: "bi-person-x-fill",
     cor: "#f59e0b",
     titulo: "Falta registrada",
-    desc: `${escapeHTML(pac?.nome || "Paciente")} faltou em ${ag.data.split("-").reverse().join("/")} às ${ag.hora}.`,
-    acao: `openProntuario(${ag.pacienteId})`,
-    lida: false,
-    ts: new Date().toLocaleDateString("pt-BR")
+    desc: `${escapeHTML(pac?.nome || "Paciente")} faltou em ${formatBR(ag.data)} às ${ag.hora}.`,
+    tipoAcao: "OPEN_PRONTUARIO",
+    ts: new Date().toLocaleDateString("pt-BR"),
   });
 
   // Verificar limite: 2 faltas injustificadas → pedir troca
-  const faltasInj = FALTAS.filter(
-    (f) => f.pacienteId === ag.pacienteId && !f.justificada
-  ).length;
+  const faltasInj = absenceRepository.countUnjustified(ag.pacienteId);
 
   if (faltasInj >= 2) {
     // Verificar se já tem pedido de troca pendente
     const jaTem = NOTIFICACOES.some(
-      (n) => n.tipo === "troca_solicitada" && n.pacienteId === ag.pacienteId && !n.lida
+      (n) => n.tipo === NotificationType.TROCA_SOLICITADA && n.pacienteId === ag.pacienteId && !n.lida
     );
     if (!jaTem) {
-      NOTIFICACOES.push({
-        id: "troca_" + ag.pacienteId + "_" + Date.now(),
-        tipo: "troca_solicitada",
+      notificationRepository.push({
+        tipo: NotificationType.TROCA_SOLICITADA,
         pacienteId: ag.pacienteId,
         icone: "bi-arrow-left-right",
         cor: "#dc2626",
-        titulo: "⚠ Troca de paciente recomendada",
+        titulo: "Troca de paciente recomendada",
         desc: `${escapeHTML(pac?.nome || "Paciente")} acumulou ${faltasInj} faltas injustificadas. Considere a troca do caso.`,
-        acao: `confirmarTrocaPaciente(${ag.pacienteId})`,
-        lida: false,
+        tipoAcao: "CONFIRMAR_TROCA",
         ts: new Date().toLocaleDateString("pt-BR"),
-        estudantesIds: pac?.estudantesIds || []
+        estudantesIds: pac?.estudantesIds || [],
       });
-      toast(`⚠ ${pac?.nome} acumulou 2 faltas. Notificação de troca enviada ao técnico.`, "warning");
+      toast(`${pac?.nome} acumulou 2 faltas. O técnico foi avisado para avaliar a troca.`, "warning");
     }
   }
 
-  saveData();
   toast("Falta registrada.", "warning");
   _updateNotifBadge();
   openProntuario(ag.pacienteId);
@@ -294,10 +304,8 @@ export function registrarFalta(agId) {
 export function justificarFalta(faltaId) {
   const f = FALTAS.find((x) => x.id === faltaId);
   if (!f) return;
-  f.justificada = true;
   const pac = PACIENTES.find((p) => p.id === f.pacienteId);
-  logAudit("falta", "Justificou falta", pac?.nome || "");
-  saveData();
+  absenceRepository.justify(faltaId, pac?.nome);
   toast("Falta justificada.", "success");
   openProntuario(f.pacienteId);
 }
@@ -314,31 +322,20 @@ export function confirmarTrocaPaciente(pacienteId) {
   const confirmDiv = document.createElement("div");
   confirmDiv.id = "troca-confirm";
   confirmDiv.className = "modal-overlay";
-  confirmDiv.style.cssText = "z-index:3100;display:flex;align-items:center;justify-content:center;padding:15px";
+  confirmDiv.style.zIndex = "3100";
   confirmDiv.innerHTML = `
-    <div class="modal" style="max-width:460px;padding:32px 28px" onclick="event.stopPropagation()">
-      <div style="display:flex;justify-content:center;margin-bottom:18px">
-        <div style="width:60px;height:60px;border-radius:50%;background:#fee2e2;display:flex;align-items:center;justify-content:center">
-          <i class="bi bi-arrow-left-right" style="font-size:28px;color:#dc2626"></i>
-        </div>
+    <div class="modal confirm-dialog" role="alertdialog" aria-labelledby="troca-title" onclick="event.stopPropagation()">
+      <div class="confirm-icon is-danger"><i class="bi bi-arrow-left-right"></i></div>
+      <h3 id="troca-title">Encerrar o caso de ${escapeHTML(pac.nome)}?</h3>
+      <p>O paciente tem ${faltasInj} ${faltasInj === 1 ? "falta injustificada" : "faltas injustificadas"}. Ao confirmar, o caso fica <strong>encerrado</strong>, os atendimentos futuros são cancelados e os estudantes do grupo são avisados.</p>
+      <p class="confirm-note">A ação não pode ser desfeita e fica registrada na auditoria.</p>
+      <div class="form-group" style="margin-top:16px;margin-bottom:0">
+        <label class="form-label" for="troca-motivo">Motivo <span class="muted" style="font-weight:400">(opcional)</span></label>
+        <textarea id="troca-motivo" class="form-control" rows="2" placeholder="Paciente informou que não poderá continuar"></textarea>
       </div>
-      <h3 style="text-align:center;margin-bottom:10px;font-size:18px">Confirmar Troca de Paciente?</h3>
-      <p style="text-align:center;font-size:13px;color:var(--text2);margin-bottom:6px">
-        <strong>${escapeHTML(pac.nome)}</strong> — ${faltasInj} faltas injustificadas
-      </p>
-      <p style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:20px;line-height:1.6">
-        O paciente será marcado como <strong>inativo</strong> e os estudantes do grupo serão notificados automaticamente.
-        Esta ação é irreversível e será registrada na trilha de auditoria.
-      </p>
-      <div class="form-group">
-        <label class="form-label">Motivo da troca (opcional)</label>
-        <textarea id="troca-motivo" class="form-control" rows="2" placeholder="Ex: Paciente sinalizou impossibilidade de continuar..."></textarea>
-      </div>
-      <div style="display:flex;gap:10px;justify-content:center;margin-top:16px">
-        <button class="btn btn-secondary" onclick="document.getElementById('troca-confirm').remove()">Cancelar</button>
-        <button class="btn" style="background:#dc2626;color:#fff" onclick="executarTrocaPaciente(${pacienteId})">
-          <i class="bi bi-check-lg"></i> Confirmar Troca
-        </button>
+      <div class="confirm-actions">
+        <button class="btn btn-secondary" onclick="document.getElementById('troca-confirm').remove()">Voltar</button>
+        <button class="btn btn-danger" onclick="executarTrocaPaciente(${pacienteId})">Encerrar caso</button>
       </div>
     </div>`;
   document.body.appendChild(confirmDiv);
@@ -354,37 +351,41 @@ export function executarTrocaPaciente(pacienteId) {
   if (!pac) return;
 
   pac.status = "inativo";
+  // Encerramento registrado no prontuário (Res. CFP 001/2009, art. 2º IV)
+  pac.encerramento = {
+    motivo: "interrupcao",
+    data: today(),
+    destino: null,
+    sintese: `Caso encerrado por ${FALTAS.filter((f) => f.pacienteId === pacienteId && !f.justificada).length} faltas injustificadas.${motivo ? " " + motivo : ""}`,
+  };
 
   // Cancelar todos os agendamentos futuros do paciente
-  const hojeISO = new Date().toISOString().split("T")[0];
-  AGENDAMENTOS.filter((a) => a.pacienteId === pacienteId && a.data >= hojeISO && a.status === "confirmado")
-    .forEach((a) => { a.status = "cancelado"; });
+  const hojeISO = today();
+  AGENDAMENTOS.filter((a) => a.pacienteId === pacienteId && a.data >= hojeISO && a.status === AppointmentStatus.CONFIRMADO)
+    .forEach((a) => { a.status = AppointmentStatus.CANCELADO; });
 
   // Marcar notificação de troca como lida
-  NOTIFICACOES.filter((n) => n.tipo === "troca_solicitada" && n.pacienteId === pacienteId)
+  NOTIFICACOES.filter((n) => n.tipo === NotificationType.TROCA_SOLICITADA && n.pacienteId === pacienteId)
     .forEach((n) => { n.lida = true; });
 
   // Notificar os estudantes do grupo
   const estudantesIds = pac.estudantesIds || [];
   if (estudantesIds.length > 0) {
-    NOTIFICACOES.push({
-      id: "troca_realizada_" + pacienteId + "_" + Date.now(),
-      tipo: "troca_realizada",
+    notificationRepository.push({
+      tipo: NotificationType.TROCA_REALIZADA,
       pacienteId: pacienteId,
       estudantesIds: estudantesIds,
       icone: "bi-person-dash-fill",
       cor: "#dc2626",
       titulo: "Troca de paciente confirmada",
       desc: `O caso de ${escapeHTML(pac.nome)} foi encerrado pelo técnico.${motivo ? " Motivo: " + escapeHTML(motivo) : ""} Aguarde a alocação de um novo paciente.`,
-      acao: "",
-      lida: false,
       ts: new Date().toLocaleDateString("pt-BR"),
     });
   }
 
   logAudit("troca", "Executou troca de paciente" + (motivo ? ": " + motivo : ""), pac.nome);
   saveData();
-  toast(`Paciente ${pac.nome} marcado como inativo. Estudantes notificados.`, "success");
+  toast(`Caso de ${pac.nome} encerrado. Estudantes avisados.`, "success");
   _updateNotifBadge();
   navigate("pacientes");
 }

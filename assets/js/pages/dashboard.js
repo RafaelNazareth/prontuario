@@ -5,78 +5,228 @@
 
 import { currentUser, navigate, saveSession } from "../core/auth.js";
 import { renderProntuario } from "./pacientes.js";
-import { ACESSO_PACIENTE, AGENDAMENTOS, ANAMNESES, EVOLUCOES, FALTAS, PACIENTES, USERS, escapeHTML, getPacientesPermitidos } from "../core/store.js";
+import { ACESSO_PACIENTE, AGENDAMENTOS, ANAMNESES, EVOLUCOES, FALTAS, PACIENTES, USERS, badgeAgendamento, escapeHTML, getPacientesPermitidos } from "../core/store.js";
 import { toast } from "../core/utils.js";
+import { calculateAge, formatShort, formatLong, weekdayAbbrev, today } from "../core/dateService.js";
+import { can } from "../core/permissions.js";
+import { logAudit } from "../core/store.js";
 
-export function openProntuario(pid) {
-  const meusPacientesIds = getPacientesPermitidos().map((p) => p.id);
-  if (!meusPacientesIds.includes(pid)) {
+/**
+ * Abre o prontuário. Cada abertura é auditada como consulta (SBIS
+ * NGS1.07.03); reaberturas internas (após salvar) passam
+ * `{ registrar: false }` para não duplicar o evento.
+ */
+export function openProntuario(pid, aba, { registrar = true } = {}) {
+  if (!can("patient.read", { id: pid })) {
     toast("Acesso negado. Paciente não alocado ao seu usuário.", "error");
     return navigate("pacientes");
   }
 
   const p = PACIENTES.find((x) => x.id === pid);
   if (!p) return navigate("pacientes");
-  document.getElementById("topbar-title").textContent =
-    `Prontuário · ${escapeHTML(p.nome)}`;
+  const crumb = currentUser.papel === "estudante" ? "Meus casos" : "Pacientes";
+  document.getElementById("topbar-title").innerHTML =
+    `<span class="topbar-crumb">${crumb}</span>${escapeHTML(p.nome)}`;
   saveSession(currentUser, `prontuario_${pid}`);
-  document.getElementById("page-content").innerHTML = renderProntuario(pid);
+  const y = window.scrollY;
+  document.getElementById("page-content").innerHTML = renderProntuario(pid, aba);
   document
     .querySelectorAll(".nav-item")
-    .forEach((el) => el.classList.remove("active"));
+    .forEach((el) => el.classList.toggle("active", el.dataset.page === "pacientes"));
+  if (registrar) {
+    window.scrollTo(0, 0);
+    logAudit("consulta", "Consultou prontuário", null, { evento: "consulta_prontuario", pacienteId: pid });
+  } else window.scrollTo(0, y);
 }
 
+// calcIdade/_dashFmtData/_dashFmtDataLonga/_dashDiaSemana mantidos como
+// aliases finos de core/dateService.js (nomes preservados por serem
+// exportados — ver docs/FRONTEND_AUDIT.md sobre duplicação de datas).
 export function calcIdade(nasc) {
-  const hoje = new Date();
-  const nascDate = new Date(nasc);
-  let idade = hoje.getFullYear() - nascDate.getFullYear();
-  const mDiff = hoje.getMonth() - nascDate.getMonth();
-  if (mDiff < 0 || (mDiff === 0 && hoje.getDate() < nascDate.getDate())) {
-    idade--;
-  }
-  return idade;
+  return calculateAge(nasc);
 }
 
 /* ============================================================  DASHBOARD  */
 
-// Helpers internos do dashboard
 export function _dashFmtData(iso) {
-  if (!iso) return "—";
-  const [y, m, d] = iso.split("-");
-  return `${d}/${m}`;
+  return formatShort(iso);
 }
 export function _dashFmtDataLonga(iso) {
-  if (!iso) return "—";
-  const meses = [
-    "jan",
-    "fev",
-    "mar",
-    "abr",
-    "mai",
-    "jun",
-    "jul",
-    "ago",
-    "set",
-    "out",
-    "nov",
-    "dez",
-  ];
-  const [y, m, d] = iso.split("-");
-  return `${parseInt(d)} ${meses[parseInt(m) - 1]}`;
+  return formatLong(iso);
 }
 export function _dashDiaSemana(iso) {
-  const dias = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-  return dias[new Date(iso + "T12:00:00").getDay()];
+  return weekdayAbbrev(iso);
 }
+// Nível de urgência por quantidade de dias sem registro.
+// Retorna a classe de status (.due-*) e um rótulo — a cor nunca vai sozinha.
 export function _dashUrgenciaCor(n) {
-  if (n === 0) return { bg: "#dcfce7", text: "#14532d", label: "Zerado" };
-  if (n <= 1) return { bg: "#fef3c7", text: "#78350f", label: "Atenção" };
-  return { bg: "#fee2e2", text: "#7f1d1d", label: "Crítico" };
+  if (n === 0) return { cls: "", label: "Em dia" };
+  if (n <= 1) return { cls: "due-warn", label: "Atenção" };
+  return { cls: "due-crit", label: "Crítico" };
 }
+
+// ── Helpers de apresentação ──────────────────────────────────
+const TITULOS = /^(dr|dra|prof|profa|sr|sra)\.?$/i;
+
+function _primeiroNome(nome) {
+  const partes = (nome || "").split(" ").filter(Boolean);
+  const semTitulo = partes.filter((p) => !TITULOS.test(p));
+  return semTitulo[0] || partes[0] || "";
+}
+
+function _saudacao() {
+  const h = new Date().getHours();
+  if (h < 12) return "Bom dia";
+  if (h < 18) return "Boa tarde";
+  return "Boa noite";
+}
+
+function _dataPorExtenso() {
+  return new Date().toLocaleDateString("pt-BR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
+function _plural(n, um, varios) {
+  return `${n} ${n === 1 ? um : varios}`;
+}
+
+function _fmtDecimal(n) {
+  return n.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+}
+
+function _diasDesde(isoData, hojeDate) {
+  return Math.round((hojeDate - new Date(isoData + "T12:00:00")) / 86400000);
+}
+
+function _ultimaEvolucao(pid) {
+  const evs = EVOLUCOES[pid] || [];
+  return evs.length > 0 ? evs[evs.length - 1].data?.substring(0, 10) : null;
+}
+
+function _avatar(p, size = "sm") {
+  return `<div class="patient-avatar ${size}" style="background:${p?.cor || "#6f7d72"}" aria-hidden="true">${escapeHTML(p?.ini || "?")}</div>`;
+}
+
+function _kpi({ label, value, unit = "", meter = null, warn = false, note = "", noteCls = "" }) {
+  return `<div class="kpi">
+    <div class="kpi-label">${label}</div>
+    <div class="kpi-value">${value}${unit ? `<small>${unit}</small>` : ""}</div>
+    ${meter !== null ? `<div class="kpi-meter${warn ? " is-warn" : ""}" role="presentation"><span style="width:${Math.max(0, Math.min(100, meter))}%"></span></div>` : ""}
+    ${note ? `<div class="kpi-note ${noteCls}">${note}</div>` : ""}
+  </div>`;
+}
+
+function _taskList(tarefas) {
+  return `<ul class="task-list">${tarefas
+    .map((t) => {
+      const acao = t.acao
+        ? t.acao
+        : t.targetPage
+        ? `navigate('${t.targetPage}')`
+        : t.pacienteId
+          ? `openProntuario(${t.pacienteId})`
+          : "";
+      return `<li class="task task-${t.nivel}">
+        <div class="task-icon"><i class="bi ${t.icon}" aria-hidden="true"></i></div>
+        <div class="task-body">
+          <div class="task-title">${t.titulo}</div>
+          <div class="task-desc">${t.desc}</div>
+        </div>
+        ${acao && t.label ? `<button class="btn btn-secondary btn-sm" onclick="${acao}">${t.label}</button>` : ""}
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+// Agenda do dia como linha do tempo, com marcador de "agora".
+function _dayTimeline(agsHoje, { mostrarEstudante = true, limite = 8 } = {}) {
+  if (agsHoje.length === 0) {
+    return `<div class="empty-state compact"><i class="bi bi-calendar4"></i><h3>Nenhum atendimento hoje</h3><p>Os atendimentos do dia aparecem aqui em ordem de horário.</p></div>`;
+  }
+  const agora = new Date();
+  const agoraHM = `${String(agora.getHours()).padStart(2, "0")}:${String(agora.getMinutes()).padStart(2, "0")}`;
+  let nowInserted = false;
+  const itens = agsHoje.slice(0, limite).map((ag) => {
+    const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+    const est = USERS.find((u) => u.id === ag.estudanteId);
+    const passado = ag.hora < agoraHM;
+    let now = "";
+    if (!passado && !nowInserted) {
+      nowInserted = true;
+      now = `<li class="day-now" aria-label="Agora, ${agoraHM}">${agoraHM}</li>`;
+    }
+    const meta = [ag.local, mostrarEstudante && est ? _primeiroNome(est.nome) : null, ag.status !== "confirmado" ? ag.status : null]
+      .filter(Boolean)
+      .map(escapeHTML)
+      .join(" · ");
+    return `${now}<li class="day-slot${passado ? " is-past" : ""}">
+      <div class="day-time">${ag.hora}</div>
+      <button type="button" class="day-entry" onclick="openProntuario(${ag.pacienteId})">
+        <strong>${escapeHTML(pac?.nome || "—")}</strong><span>${meta}</span>
+      </button>
+    </li>`;
+  });
+  const mais = agsHoje.length > limite
+    ? `<div class="day-more">e mais ${agsHoje.length - limite} na agenda</div>`
+    : "";
+  return `<ol class="day-timeline">${itens.join("")}</ol>${mais}`;
+}
+
+function _proximosTable(proximos, hoje, { mostrarEstudante = true } = {}) {
+  if (proximos.length === 0) {
+    return `<div class="empty-state compact"><i class="bi bi-calendar-x"></i><h3>Nenhum atendimento agendado</h3><p>Novos agendamentos aparecem aqui assim que forem criados.</p></div>`;
+  }
+  const rows = proximos
+    .map((ag) => {
+      const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
+      const est = USERS.find((u) => u.id === ag.estudanteId);
+      const isHoje = ag.data === hoje;
+      return `<tr class="${isHoje ? "row-today" : ""}">
+        <td class="cell-date">${isHoje ? `<span class="today-mark">Hoje</span>` : `${_dashDiaSemana(ag.data)}, ${_dashFmtDataLonga(ag.data)}`}</td>
+        <td class="num">${ag.hora}</td>
+        <td><div class="cell-person">${_avatar(pac)}<button class="dash-link-btn" onclick="openProntuario(${ag.pacienteId})">${escapeHTML(pac?.nome || "—")}</button></div></td>
+        <td class="hide-sm">${escapeHTML(ag.local)}</td>
+        ${mostrarEstudante ? `<td class="hide-sm">${escapeHTML(est ? _primeiroNome(est.nome) : "—")}</td>` : ""}
+        <td>${badgeAgendamento(ag.status)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<div class="table-responsive"><table class="compact"><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th class="hide-sm">Local</th>${mostrarEstudante ? `<th class="hide-sm">Estudante</th>` : ""}<th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// Série mensal (últimos 6 meses) usada pelo gráfico e pela legenda.
+function _serieMensal() {
+  const labMeses = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  const hoje = new Date();
+  const meses = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+    meses.push({ y: d.getFullYear(), m: d.getMonth(), label: labMeses[d.getMonth()] });
+  }
+  // Só datas até hoje: agendamentos futuros ainda não foram realizados.
+  const ate = today();
+  const contar = (filtro) =>
+    meses.map(({ y, m }) =>
+      AGENDAMENTOS.filter((a) => {
+        const d = new Date(a.data + "T12:00:00");
+        return a.data <= ate && d.getFullYear() === y && d.getMonth() === m && filtro(a);
+      }).length,
+    );
+  return {
+    labels: meses.map((m) => m.label),
+    realizados: contar((a) => a.status === "confirmado"),
+    cancelados: contar((a) => a.status === "cancelado" || a.status === "faltou"),
+  };
+}
+
+const _soma = (arr) => arr.reduce((a, b) => a + b, 0);
 
 export function renderDashboard() {
   const role = currentUser.papel;
-  const hoje = new Date().toISOString().split("T")[0];
+  const hoje = today();
   const hojeDate = new Date();
   const meusPacientes = getPacientesPermitidos();
   const listaAtivos = meusPacientes.filter((p) => p.status === "ativo");
@@ -108,9 +258,19 @@ export function renderDashboard() {
       ? Math.round((anamnesesFeitas / listaAtivos.length) * 100)
       : 100;
 
+  const nome = escapeHTML(_primeiroNome(currentUser.nome));
+  const hojeAtivos = agsHoje.filter((a) => a.status !== "cancelado").length;
+
   // ── DASHBOARD GERENCIAL (técnico / supervisor) ────────────────────────────
   if (role === "tecnico" || role === "supervisor") {
-    const estudantes = USERS.filter((u) => u.papel === "estudante");
+    // Técnico vê a alocação de todo o serviço; supervisor, só os estudantes dos seus casos
+    // (o servidor já entrega apenas os pacientes que ele supervisiona).
+    const estudantes = USERS.filter(
+      (u) =>
+        u.papel === "estudante" &&
+        u.ativo !== false &&
+        (role === "tecnico" || meusPacientes.some((p) => (p.estudantesIds || []).includes(u.id))),
+    );
     const acessosPendentes = ACESSO_PACIENTE.filter(
       (a) => a.status === "pendente",
     ).length;
@@ -120,360 +280,212 @@ export function renderDashboard() {
           (p) => p.estudantesIds && p.estudantesIds.includes(e.id),
         ),
     ).length;
+    const estAlocados = estudantes.length - estSemCaso;
     const totalPacientes =
       role === "tecnico" ? PACIENTES.length : meusPacientes.length;
     const inativos = meusPacientes.filter((p) => p.status === "inativo").length;
+    const faltasInj = FALTAS.filter((f) => !f.justificada).length;
 
-    // Índice de saúde operacional (score 0–100)
-    let saudeScore = 100;
-    if (anamnesesPendentes > 0)
-      saudeScore -= Math.min(30, anamnesesPendentes * 10);
-    if (acessosPendentes > 0 && role === "tecnico")
-      saudeScore -= Math.min(20, acessosPendentes * 7);
-    if (estSemCaso > 0) saudeScore -= Math.min(20, estSemCaso * 10);
-    saudeScore = Math.max(0, saudeScore);
-    const saudeCor =
-      saudeScore >= 80 ? "#2e7d32" : saudeScore >= 50 ? "#f59e0b" : "#dc2626";
-    const saudeLabel =
-      saudeScore >= 80 ? "Regular" : saudeScore >= 50 ? "Atenção" : "Crítico";
-
-    // Atividade recente de evoluções (últimas 4 semanas por semana)
-    const semanaLabels = [];
-    const semanaData = [];
-    for (let i = 3; i >= 0; i--) {
-      const d = new Date(hojeDate);
-      d.setDate(d.getDate() - i * 7);
-      const semStr = d.toISOString().split("T")[0].substring(0, 7);
-      semanaLabels.push(`S-${4 - i}`);
-      let count = 0;
-      Object.values(EVOLUCOES).forEach((evs) => {
-        evs.forEach((e) => {
-          if (e.data && e.data.startsWith(semStr)) count++;
-        });
-      });
-      semanaData.push(count);
-    }
-    // Adiciona semana atual com dado real
-    semanaLabels[3] = "Esta sem.";
-
-    // Distribuição de carga dos estudantes
-    const cargaLabels = estudantes.map((e) => e.nome.split(" ")[0]);
-    const cargaData = estudantes.map(
-      (e) =>
-        PACIENTES.filter(
-          (p) => p.estudantesIds && p.estudantesIds.includes(e.id),
-        ).length,
-    );
-    const evsPorEstudante = estudantes.map((e) => {
-      let n = 0;
-      PACIENTES.filter(
-        (p) => p.estudantesIds && p.estudantesIds.includes(e.id),
-      ).forEach((p) => {
-        n += (EVOLUCOES[p.id] || []).length;
-      });
-      return n;
-    });
-
-    // Alertas críticos
-    const alertas = [];
-    if (role === "tecnico" && acessosPendentes > 0)
-      alertas.push({
+    const tarefas = [];
+    // Co-assinatura de registros de estagiários (Res. CFP 001/2009, art. 3º)
+    const aValidar = meusPacientes
+      .filter((p) => role === "tecnico" || p.supervisorId === currentUser.id)
+      .map((p) => ({ p, n: (EVOLUCOES[p.id] || []).filter((x) => x.validacao?.status === "pendente").length }))
+      .filter((x) => x.n > 0);
+    const totalAValidar = aValidar.reduce((s, x) => s + x.n, 0);
+    if (totalAValidar > 0)
+      tarefas.push({
         nivel: "critico",
-        icon: "bi-shield-x-fill",
-        titulo: `${acessosPendentes} solicitação(ões) de acesso pendente`,
-        desc: "Pacientes aguardam liberação de prontuário digital.",
-        acao: "navigate('acesso-pac')",
-        label: "Resolver agora",
+        icon: "bi-patch-check",
+        titulo: `${_plural(totalAValidar, "evolução de estagiário aguardando", "evoluções de estagiários aguardando")} sua validação`,
+        desc: `Em ${_plural(aValidar.length, "caso", "casos")}. O registro só é válido com a assinatura do supervisor.`,
+        acao: `openProntuario(${aValidar[0].p.id},'evolucoes')`,
+        label: "Validar",
+      });
+    if (role === "tecnico" && acessosPendentes > 0)
+      tarefas.push({
+        nivel: "critico",
+        icon: "bi-file-earmark-lock",
+        titulo: `${_plural(acessosPendentes, "solicitação de titular aguardando", "solicitações de titulares aguardando")} resposta`,
+        desc: "Prazo legal de 15 dias para resposta completa (LGPD, art. 19).",
+        targetPage: "acesso-pac",
+        label: "Revisar",
       });
     if (anamnesesPendentes > 0)
-      alertas.push({
+      tarefas.push({
         nivel: "atencao",
-        icon: "bi-clipboard-x-fill",
-        titulo: `${anamnesesPendentes} caso(s) sem anamnese finalizada`,
-        desc: "Casos ativos sem anamnese são irregulares perante o CRP.",
-        acao: null,
-        label: null,
+        icon: "bi-clipboard",
+        titulo: `${_plural(anamnesesPendentes, "caso ativo", "casos ativos")} sem anamnese finalizada`,
+        desc: "O CRP exige anamnese concluída para todo caso em atendimento.",
+        targetPage: "pacientes",
+        label: "Ver casos",
       });
     if (estSemCaso > 0)
-      alertas.push({
+      tarefas.push({
         nivel: "atencao",
-        icon: "bi-person-slash",
-        titulo: `${estSemCaso} estudante(s) sem caso alocado`,
-        desc: "Alocar estudantes garante a carga horária obrigatória.",
-        acao: "navigate('pacientes')",
-        label: "Alocar agora",
+        icon: "bi-person-dash",
+        titulo: `${_plural(estSemCaso, "estudante", "estudantes")} sem caso alocado`,
+        desc: "Sem caso, o estudante não cumpre a carga horária de estágio.",
+        targetPage: "pacientes",
+        label: "Alocar",
       });
-    if (alertas.length === 0)
-      alertas.push({
+    if (faltasInj > 0)
+      tarefas.push({
+        nivel: "atencao",
+        icon: "bi-person-x",
+        titulo: `${_plural(faltasInj, "falta sem justificativa", "faltas sem justificativa")}`,
+        desc: "Duas faltas injustificadas no mesmo caso geram pedido de troca.",
+        targetPage: "agenda",
+        label: "Ver agenda",
+      });
+    const qtdPend = tarefas.length;
+    if (qtdPend === 0)
+      tarefas.push({
         nivel: "ok",
-        icon: "bi-check-circle-fill",
-        titulo: "Operação 100% regular",
-        desc: "Nenhuma pendência crítica detectada no momento.",
-        acao: null,
-        label: null,
+        icon: "bi-check2",
+        titulo: "Nada pendente",
+        desc: "Documentação, alocação e acessos estão em dia.",
       });
 
-    const alertasHtml = alertas
-      .map((a) => {
-        const cores = {
-          critico: {
-            bg: "#fef2f2",
-            bord: "#dc2626",
-            icon: "#dc2626",
-            tituloCor: "#7f1d1d",
-          },
-          atencao: {
-            bg: "#fffbeb",
-            bord: "#f59e0b",
-            icon: "#d97706",
-            tituloCor: "#78350f",
-          },
-          ok: {
-            bg: "#f0fdf4",
-            bord: "#22c55e",
-            icon: "#16a34a",
-            tituloCor: "#14532d",
-          },
-        };
-        const c = cores[a.nivel];
-        return `<div class="dash-alert" style="background:${c.bg};border-left:3px solid ${c.bord}">
-        <i class="bi ${a.icon}" style="color:${c.icon};font-size:15px;flex-shrink:0;margin-top:1px"></i>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:700;color:${c.tituloCor};margin-bottom:2px">${a.titulo}</div>
-          <div style="font-size:11px;color:var(--text2);line-height:1.5">${a.desc}</div>
-          ${a.acao ? `<button class="dash-alert-btn" onclick="${a.acao}">${a.label} <i class="bi bi-arrow-right"></i></button>` : ""}
-        </div>
-      </div>`;
-      })
-      .join("");
-
-    // Lista de pacientes sem evolução recente (>14 dias)
     const semEvolucao = listaAtivos
-      .filter((p) => {
-        const evs = EVOLUCOES[p.id] || [];
-        if (evs.length === 0) return true;
-        const ultima = evs[evs.length - 1].data || "";
-        const diffDias =
-          (hojeDate - new Date(ultima.substring(0, 10) + "T12:00:00")) /
-          86400000;
-        return diffDias > 14;
+      .map((p) => {
+        const ultima = _ultimaEvolucao(p.id);
+        return { p, ultima, dias: ultima ? _diasDesde(ultima, hojeDate) : null };
       })
-      .slice(0, 5);
+      .filter((x) => x.dias === null || x.dias > 14)
+      .sort((a, b) => (b.dias ?? 9999) - (a.dias ?? 9999));
+
+    const serie = _serieMensal();
+    const totReal = _soma(serie.realizados);
+    const totCanc = _soma(serie.cancelados);
+
+    const resumo =
+      `Hoje há <strong>${_plural(hojeAtivos, "atendimento", "atendimentos")}</strong> na agenda` +
+      (qtdPend > 0
+        ? ` e <strong>${_plural(qtdPend, "pendência", "pendências")}</strong> para resolver.`
+        : ". Nenhuma pendência no momento.");
 
     return `
-    <div class="dash-welcome-bar">
+    <section class="dash-head">
       <div>
-        <div class="dash-welcome-title">Bom dia, ${escapeHTML(currentUser.nome.split(" ")[0])} <span style="font-size:18px">👋</span></div>
-        <div class="dash-welcome-sub">Visão operacional do Serviço-Escola · ${new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })}</div>
+        <div class="dash-date">${_dataPorExtenso()}</div>
+        <h1 class="dash-greeting">${_saudacao()}, ${nome}</h1>
+        <p class="dash-summary">${resumo}</p>
       </div>
-      <div class="dash-health-pill" style="border-color:${saudeCor}20;background:${saudeCor}10">
-        <div class="dash-health-ring" style="--score:${saudeScore};--cor:${saudeCor}">
-          <svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.9" fill="none" stroke="#e5e7eb" stroke-width="3.2"/><circle cx="18" cy="18" r="15.9" fill="none" stroke="${saudeCor}" stroke-width="3.2" stroke-dasharray="${saudeScore} ${100 - saudeScore}" stroke-dashoffset="25" stroke-linecap="round"/></svg>
-          <span style="color:${saudeCor}">${saudeScore}</span>
-        </div>
-        <div>
-          <div style="font-size:11px;font-weight:700;color:${saudeCor}">${saudeLabel}</div>
-          <div style="font-size:10px;color:var(--text3)">Saúde operacional</div>
-        </div>
+      <div class="page-header-actions">
+        <button class="btn btn-secondary" onclick="navigate('agenda')"><i class="bi bi-calendar3"></i> Agenda</button>
+        ${can("patient.create") ? `<button class="btn btn-primary" onclick="openModalNovoPaciente()"><i class="bi bi-plus-lg"></i> Novo paciente</button>` : ""}
       </div>
-    </div>
+    </section>
 
-    <div class="stats-grid" style="margin-bottom:20px">
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:var(--sc-green-pale);color:var(--sc-green-dark)"><i class="bi bi-people-fill"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${listaAtivos.length}<span class="dash-kpi-sub">/ ${totalPacientes} total</span></div>
-          <div class="dash-kpi-label">Pacientes Ativos</div>
-        </div>
-        <div class="dash-kpi-trend ${inativos > 0 ? "trend-warn" : "trend-ok"}">
-          <i class="bi ${inativos > 0 ? "bi-arrow-down-short" : "bi-check2"}"></i> ${inativos > 0 ? inativos + " inativo(s)" : "Todos ativos"}
-        </div>
-      </div>
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:${taxaConformidade < 80 ? "#fef3c7" : "#dcfce7"};color:${taxaConformidade < 80 ? "#92400e" : "#14532d"}"><i class="bi bi-shield-check"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${taxaConformidade}%<span class="dash-kpi-sub">${anamnesesFeitas}/${listaAtivos.length} ok</span></div>
-          <div class="dash-kpi-label">Conformidade CRP</div>
-          <div class="dash-kpi-bar"><div style="width:${taxaConformidade}%;background:${taxaConformidade < 80 ? "#f59e0b" : "#2e7d32"}"></div></div>
-        </div>
-        <div class="dash-kpi-trend ${taxaConformidade < 80 ? "trend-warn" : "trend-ok"}">
-          <i class="bi ${taxaConformidade < 80 ? "bi-exclamation-circle" : "bi-check2"}"></i> ${taxaConformidade < 80 ? anamnesesPendentes + " pendente(s)" : "Regular"}
-        </div>
-      </div>
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:#dbeafe;color:#1e40af"><i class="bi bi-person-workspace"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${estudantes.length - estSemCaso}<span class="dash-kpi-sub">/ ${estudantes.length} estudantes</span></div>
-          <div class="dash-kpi-label">Estudantes Alocados</div>
-          <div class="dash-kpi-bar"><div style="width:${estudantes.length > 0 ? Math.round(((estudantes.length - estSemCaso) / estudantes.length) * 100) : 100}%;background:#3b82f6"></div></div>
-        </div>
-        <div class="dash-kpi-trend ${estSemCaso > 0 ? "trend-warn" : "trend-ok"}">
-          <i class="bi ${estSemCaso > 0 ? "bi-person-slash" : "bi-check2"}"></i> ${estSemCaso > 0 ? estSemCaso + " ocioso(s)" : "Todos alocados"}
-        </div>
-      </div>
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:#ede9fe;color:#6d28d9"><i class="bi bi-journal-medical"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${totalEvs}<span class="dash-kpi-sub">evoluções</span></div>
-          <div class="dash-kpi-label">Volume Clínico Total</div>
-        </div>
-        <div class="dash-kpi-trend trend-ok">
-          <i class="bi bi-graph-up-arrow"></i> ${listaAtivos.length > 0 ? (totalEvs / listaAtivos.length).toFixed(1) + " / caso" : "—"}
-        </div>
-      </div>
-    </div>
+    <section class="kpi-strip" aria-label="Indicadores">
+      ${_kpi({
+        label: "Pacientes ativos",
+        value: listaAtivos.length,
+        unit: `de ${totalPacientes}`,
+        note: inativos > 0 ? `${_plural(inativos, "caso encerrado", "casos encerrados")}` : "Nenhum caso encerrado",
+      })}
+      ${_kpi({
+        label: "Anamneses finalizadas",
+        value: `${taxaConformidade}%`,
+        unit: `${anamnesesFeitas} de ${listaAtivos.length}`,
+        meter: taxaConformidade,
+        warn: taxaConformidade < 80,
+        note: anamnesesPendentes > 0 ? `${_plural(anamnesesPendentes, "caso pendente", "casos pendentes")} no CRP` : "Todos em conformidade com o CRP",
+        noteCls: anamnesesPendentes > 0 ? "is-warn" : "is-ok",
+      })}
+      ${_kpi({
+        label: "Estudantes com caso",
+        value: estAlocados,
+        unit: `de ${estudantes.length}`,
+        meter: estudantes.length ? (estAlocados / estudantes.length) * 100 : 100,
+        warn: estSemCaso > 0,
+        note: estSemCaso > 0 ? `${_plural(estSemCaso, "aguardando alocação", "aguardando alocação")}` : "Todos alocados",
+        noteCls: estSemCaso > 0 ? "is-warn" : "is-ok",
+      })}
+      ${_kpi({
+        label: "Evoluções registradas",
+        value: totalEvs.toLocaleString("pt-BR"),
+        note: listaAtivos.length > 0 ? `${_fmtDecimal(totalEvs / listaAtivos.length)} por caso ativo` : "Sem casos ativos",
+      })}
+    </section>
 
-    <div class="dash-row-3" style="margin-bottom:20px">
-
-      <div class="card" style="flex:1.35;min-width:0">
-        <div class="card-header">
-          <span class="card-title"><i class="bi bi-bar-chart-line-fill" style="color:var(--sc-green)"></i> Atendimentos por Mês</span>
-          <span style="font-size:11px;color:var(--text3)">consultas realizadas × canceladas</span>
-        </div>
-        <div class="card-body" style="padding:10px 14px 14px">
-          <div class="chart-container" style="height:190px"><canvas id="chartAtendMes"></canvas></div>
-        </div>
-      </div>
-
-      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
-
-        <div class="card" style="flex:none">
-          <div class="card-header"><span class="card-title"><i class="bi bi-diagram-3-fill" style="color:#6d28d9"></i> Situação atual</span></div>
-          <div class="card-body" style="padding:10px 14px">
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
-              <div class="dash-mini-stat" style="background:#f0fdf4;border-color:#bbf7d0">
-                <div class="dash-mini-val" style="color:#14532d">${PACIENTES.filter(p=>p.status==="ativo").length}</div>
-                <div class="dash-mini-lbl">Grupos ativos</div>
-              </div>
-              <div class="dash-mini-stat" style="background:#fffbeb;border-color:#fde68a">
-                <div class="dash-mini-val" style="color:#92400e">${listaAtivos.filter(p=>!(ANAMNESES[p.id]&&ANAMNESES[p.id].status==="finalizada")).length}</div>
-                <div class="dash-mini-lbl">Sem anamnese</div>
-              </div>
-              <div class="dash-mini-stat" style="background:#fef2f2;border-color:#fecaca">
-                <div class="dash-mini-val" style="color:#991b1b">${FALTAS.filter(f=>!f.justificada).length}</div>
-                <div class="dash-mini-lbl">Faltas inj.</div>
-              </div>
-              <div class="dash-mini-stat" style="background:#ede9fe;border-color:#ddd6fe">
-                <div class="dash-mini-val" style="color:#6d28d9">${totalEvs}</div>
-                <div class="dash-mini-lbl">Evoluções</div>
-              </div>
+    <div class="dash-layout">
+      <div class="dash-col">
+        <section class="card">
+          <div class="card-header" style="flex-wrap:wrap">
+            <div>
+              <h2 class="card-title">Atendimentos por mês</h2>
+              <div class="card-sub">Últimos 6 meses, ${role === "tecnico" ? "todo o Serviço-Escola" : "seus casos"}</div>
+            </div>
+            <div class="chart-legend">
+              <span class="chart-legend-item"><i style="background:var(--chart-1)"></i>Realizados <b>${totReal}</b></span>
+              <span class="chart-legend-item"><i style="background:var(--chart-2)"></i>Cancelados ou faltas <b>${totCanc}</b></span>
             </div>
           </div>
-        </div>
-
-        <div class="card" style="flex:1">
-          <div class="card-header"><span class="card-title"><i class="bi bi-pie-chart-fill" style="color:#f59e0b"></i> Conformidade CRP</span></div>
-          <div class="card-body" style="padding:8px 14px">
-            <div class="chart-container" style="height:110px"><canvas id="chartAnamneses"></canvas></div>
+          <div class="card-body" style="padding:16px 16px 12px 8px">
+            <div class="chart-container"><canvas id="chartAtendMes" role="img" aria-label="Atendimentos por mês: ${serie.labels.map((l, i) => `${l}, ${serie.realizados[i]} realizados e ${serie.cancelados[i]} cancelados ou faltas`).join("; ")}"></canvas></div>
           </div>
-        </div>
+        </section>
 
-      </div>
-
-      <div class="card" style="flex:none;width:240px;min-width:200px">
-        <div class="card-header"><span class="card-title"><i class="bi bi-calendar-event" style="color:var(--sc-green)"></i> Agenda Hoje</span></div>
-        <div class="card-body" style="padding:8px 12px;max-height:280px;overflow-y:auto">
-          ${
-            agsHoje.length === 0
-              ? '<div style="text-align:center;padding:20px 0;font-size:12px;color:var(--text3)"><i class="bi bi-calendar-x" style="font-size:22px;display:block;margin-bottom:6px"></i>Nenhum atendimento hoje</div>'
-              : agsHoje.slice(0,8).map((ag) => {
-                  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-                  const est = USERS.find(u => u.id === ag.estudanteId);
-                  return '<div class="dash-today-item" onclick="openProntuario(' + ag.pacienteId + ')">' +
-                    '<div class="dash-today-hora">' + ag.hora + '</div>' +
-                    '<div class="dash-today-dot" style="background:#1b5e20"></div>' +
-                    '<div style="flex:1;min-width:0">' +
-                      '<div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHTML(pac?.nome || "—") + '</div>' +
-                      '<div style="font-size:9px;color:var(--text3)">' + escapeHTML(ag.local) + (est ? " · " + escapeHTML(est.nome.split(" ")[0]) : "") + '</div>' +
-                    '</div></div>';
-                }).join("") +
-              (agsHoje.length > 8 ? '<div style="text-align:center;font-size:11px;color:var(--text3);padding:6px 0">+' + (agsHoje.length-8) + ' mais</div>' : '')
-          }
-        </div>
-      </div>
-
-    </div>
-
-    <div class="dash-row-2" style="margin-bottom:20px">
-      <div class="card" style="flex:1;min-width:0">
-        <div class="card-header">
-          <span class="card-title"><i class="bi bi-lightning-charge-fill" style="color:#f59e0b"></i> Pendências & Alertas</span>
-          <span class="dash-badge-count" style="background:${alertas[0].nivel === "ok" ? "#dcfce7" : "#fef3c7"};color:${alertas[0].nivel === "ok" ? "#14532d" : "#78350f"}">${alertas.filter((a) => a.nivel !== "ok").length || "✓"}</span>
-        </div>
-        <div class="card-body" style="padding:12px;display:flex;flex-direction:column;gap:8px">${alertasHtml}</div>
-      </div>
-      <div class="card" style="flex:1.4;min-width:0">
-        <div class="card-header">
-          <span class="card-title"><i class="bi bi-clock-history" style="color:var(--sc-green)"></i> Casos sem Evolução Recente <span style="font-size:11px;color:var(--text3);font-weight:400">(+14 dias)</span></span>
-        </div>
-        <div class="card-body" style="padding:0">
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Casos sem evolução recente</h2>
+              <div class="card-sub">Sem registro há mais de 14 dias</div>
+            </div>
+            ${semEvolucao.length > 0 ? `<span class="count-pill is-warn">${semEvolucao.length}</span>` : ""}
+          </div>
           ${
             semEvolucao.length === 0
-              ? `<div class="empty-state" style="padding:28px 20px"><i class="bi bi-check-all" style="color:var(--sc-green);font-size:32px"></i><p style="margin-top:8px;font-weight:600">Todos os casos têm evolução recente</p></div>`
-              : `<table style="min-width:auto"><thead><tr><th>Paciente</th><th>Última evolução</th><th>Estudante(s)</th><th></th></tr></thead><tbody>
+              ? `<div class="empty-state compact"><i class="bi bi-check2-circle"></i><h3>Todos os casos estão em dia</h3><p>Cada caso ativo teve evolução registrada nas últimas duas semanas.</p></div>`
+              : `<div class="table-responsive"><table class="compact"><thead><tr><th>Paciente</th><th>Última evolução</th><th class="hide-sm">Estudantes</th><th></th></tr></thead><tbody>
               ${semEvolucao
-                .map((p) => {
-                  const evs = EVOLUCOES[p.id] || [];
-                  const ultima =
-                    evs.length > 0
-                      ? evs[evs.length - 1].data?.substring(0, 10)
-                      : null;
-                  const diffDias = ultima
-                    ? Math.round(
-                        (hojeDate - new Date(ultima + "T12:00:00")) / 86400000,
-                      )
-                    : null;
+                .slice(0, 6)
+                .map(({ p, ultima, dias }) => {
                   const ests = (p.estudantesIds || [])
-                    .map(
-                      (id) =>
-                        USERS.find((u) => u.id === id)?.nome?.split(" ")[0],
-                    )
+                    .map((id) => USERS.find((u) => u.id === id))
                     .filter(Boolean)
+                    .map((u) => escapeHTML(_primeiroNome(u.nome)))
                     .join(", ");
-                  const urg = _dashUrgenciaCor(
-                    diffDias !== null ? (diffDias > 30 ? 2 : 1) : 2,
-                  );
+                  const urg = _dashUrgenciaCor(dias === null || dias > 30 ? 2 : 1);
                   return `<tr>
-                  <td><div style="display:flex;align-items:center;gap:8px"><div class="patient-avatar" style="background:${p.cor};width:26px;height:26px;font-size:10px">${escapeHTML(p.ini)}</div><span style="font-weight:600">${escapeHTML(p.nome)}</span></div></td>
-                  <td><span style="background:${urg.bg};color:${urg.text};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${ultima ? _dashFmtDataLonga(ultima) + " (" + diffDias + "d)" : "Nunca"}</span></td>
-                  <td style="font-size:11px;color:var(--text2)">${ests || "—"}</td>
-                  <td><button class="btn btn-secondary btn-sm" onclick="openProntuario(${p.id})"><i class="bi bi-file-medical"></i></button></td>
+                  <td><div class="cell-person">${_avatar(p)}<span class="cell-name">${escapeHTML(p.nome)}</span></div></td>
+                  <td><span class="due ${urg.cls}">${ultima ? `<strong>há ${dias} dias</strong> · ${_dashFmtDataLonga(ultima)}` : "<strong>Nenhuma evolução</strong>"}</span></td>
+                  <td class="hide-sm" style="color:var(--text2)">${ests || "—"}</td>
+                  <td class="right"><button class="btn btn-ghost btn-sm" onclick="openProntuario(${p.id})">Abrir</button></td>
                 </tr>`;
                 })
                 .join("")}
-            </tbody></table>`
+            </tbody></table></div>${semEvolucao.length > 6 ? `<div class="card-footer">e mais ${semEvolucao.length - 6} casos</div>` : ""}`
           }
-        </div>
-      </div>
-    </div>
+        </section>
 
-    <div class="card" style="margin-bottom:0">
-      <div class="card-header">
-        <span class="card-title"><i class="bi bi-calendar-week" style="color:var(--sc-green)"></i> Próximos Atendimentos</span>
-        <button class="btn btn-secondary btn-sm" onclick="navigate('agenda')"><i class="bi bi-calendar3"></i> Ver agenda completa</button>
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Próximos atendimentos</h2>
+            <button class="btn btn-ghost btn-sm" onclick="navigate('agenda')">Abrir agenda</button>
+          </div>
+          ${_proximosTable(proximos7, hoje)}
+        </section>
       </div>
-      <div class="card-body" style="padding:0">
-        ${
-          proximos7.length === 0
-            ? `<div class="empty-state" style="padding:28px"><i class="bi bi-calendar-x" style="font-size:28px;color:var(--text3)"></i><p style="margin-top:8px;color:var(--text3)">Nenhum atendimento futuro agendado</p></div>`
-            : `<div class="table-responsive"><table style="min-width:auto"><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Local</th><th>Estudante</th><th>Status</th></tr></thead><tbody>
-          ${proximos7
-            .map((ag) => {
-              const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-              const est = USERS.find((u) => u.id === ag.estudanteId);
-              const isHoje = ag.data === hoje;
-              return `<tr style="${isHoje ? "background:#f0fdf4" : ""}">
-              <td><div style="font-weight:${isHoje ? "700" : "400"};color:${isHoje ? "var(--sc-green-dark)" : "inherit"}">${isHoje ? "<span style='font-size:10px;background:var(--sc-green);color:#fff;border-radius:3px;padding:1px 5px;margin-right:4px'>HOJE</span>" : ""}${_dashFmtDataLonga(ag.data)}</div><div style="font-size:10px;color:var(--text3)">${_dashDiaSemana(ag.data)}</div></td>
-              <td style="font-weight:600">${ag.hora}</td>
-              <td><div style="display:flex;align-items:center;gap:8px"><div class="patient-avatar" style="background:${pac?.cor || "#888"};width:26px;height:26px;font-size:10px">${escapeHTML(pac?.ini || "?")}</div><button class="dash-link-btn" onclick="openProntuario(${ag.pacienteId})">${escapeHTML(pac?.nome || "—")}</button></div></td>
-              <td style="font-size:12px">${escapeHTML(ag.local)}</td>
-              <td style="font-size:12px">${escapeHTML(est?.nome?.split(" ")[0] || "—")}</td>
-              <td><span class="badge ${ag.status === "confirmado" ? "badge-green" : "badge-amber"}">${ag.status}</span></td>
-            </tr>`;
-            })
-            .join("")}
-          </tbody></table></div>`
-        }
+
+      <div class="dash-col">
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Hoje</h2>
+            <span class="card-sub">${_plural(hojeAtivos, "atendimento", "atendimentos")}</span>
+          </div>
+          ${_dayTimeline(agsHoje)}
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Pendências</h2>
+            ${qtdPend > 0 ? `<span class="count-pill is-warn">${qtdPend}</span>` : ""}
+          </div>
+          ${_taskList(tarefas)}
+        </section>
       </div>
     </div>`;
   }
@@ -484,242 +496,178 @@ export function renderDashboard() {
     const anamnesesOk = meusCasos.filter(
       (p) => ANAMNESES[p.id]?.status === "finalizada",
     ).length;
-    const evsPorCaso = meusCasos.map((p) => ({
-      p,
-      n: (EVOLUCOES[p.id] || []).length,
-    }));
-    const proximaConsulta = proximos7[0];
+    const proximaConsulta = proximos7.find((a) => a.status !== "cancelado");
+    const futuras = meusAgs.filter((a) => a.data >= hoje && a.status !== "cancelado").length;
 
-    // Dias até próxima consulta
     let diasProxima = null;
     if (proximaConsulta) {
       diasProxima = Math.max(
         0,
         Math.round(
-          (new Date(proximaConsulta.data + "T12:00:00") - hojeDate) / 86400000,
+          (new Date(proximaConsulta.data + "T12:00:00") - new Date(hoje + "T12:00:00")) / 86400000,
         ),
       );
     }
 
-    // Alertas pessoais
-    const alertas = [];
+    const tarefas = [];
     if (anamnesesPendentes > 0)
-      alertas.push({
+      tarefas.push({
         nivel: "atencao",
-        icon: "bi-clipboard-x-fill",
-        titulo: `${anamnesesPendentes} caso(s) com anamnese pendente`,
-        desc: "Finalize a anamnese o quanto antes. Exigência do CRP.",
-        acao: "navigate('pacientes')",
+        icon: "bi-clipboard",
+        titulo: `${_plural(anamnesesPendentes, "anamnese pendente", "anamneses pendentes")}`,
+        desc: "Finalize a anamnese antes da próxima sessão. Exigência do CRP.",
+        targetPage: "pacientes",
         label: "Ver casos",
       });
+    const minhasPendentes = meusCasos.flatMap((p) => (EVOLUCOES[p.id] || []).filter((x) => x.autorId === currentUser.id && x.validacao?.status === "pendente"));
+    if (minhasPendentes.length)
+      tarefas.push({
+        nivel: "atencao",
+        icon: "bi-hourglass-split",
+        titulo: `${_plural(minhasPendentes.length, "evolução sua aguardando", "evoluções suas aguardando")} validação`,
+        desc: "O supervisor precisa co-assinar. Lembre-o na próxima supervisão.",
+      });
     meusCasos.forEach((p) => {
-      const evs = EVOLUCOES[p.id] || [];
-      if (evs.length === 0) {
-        alertas.push({
+      if ((EVOLUCOES[p.id] || []).length === 0) {
+        tarefas.push({
           nivel: "atencao",
-          icon: "bi-journal-x",
-          titulo: `Sem evoluções: ${p.nome}`,
-          desc: "Este caso ainda não possui nenhuma evolução registrada.",
-          acao: `openProntuario(${p.id})`,
+          icon: "bi-journal",
+          titulo: `Primeira evolução de ${escapeHTML(_primeiroNome(p.nome))}`,
+          desc: "Este caso ainda não tem nenhuma evolução registrada.",
+          pacienteId: p.id,
           label: "Registrar",
         });
       }
     });
-    if (alertas.length === 0)
-      alertas.push({
+    const qtdPend = tarefas.length;
+    if (qtdPend === 0)
+      tarefas.push({
         nivel: "ok",
-        icon: "bi-patch-check-fill",
-        titulo: "Tudo em dia! Continue assim.",
-        desc: "Todos os seus casos estão com documentação regular.",
-        acao: null,
-        label: null,
+        icon: "bi-check2",
+        titulo: "Documentação em dia",
+        desc: "Todos os seus casos têm anamnese e evoluções registradas.",
       });
 
-    const alertasHtml = alertas
-      .slice(0, 3)
-      .map((a) => {
-        const cores = {
-          atencao: {
-            bg: "#fffbeb",
-            bord: "#f59e0b",
-            icon: "#d97706",
-            tituloCor: "#78350f",
-          },
-          ok: {
-            bg: "#f0fdf4",
-            bord: "#22c55e",
-            icon: "#16a34a",
-            tituloCor: "#14532d",
-          },
-        };
-        const c = cores[a.nivel];
-        return `<div class="dash-alert" style="background:${c.bg};border-left:3px solid ${c.bord}">
-        <i class="bi ${a.icon}" style="color:${c.icon};font-size:15px;flex-shrink:0;margin-top:1px"></i>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:700;color:${c.tituloCor};margin-bottom:2px">${a.titulo}</div>
-          <div style="font-size:11px;color:var(--text2)">${a.desc}</div>
-          ${a.acao ? `<button class="dash-alert-btn" onclick="${a.acao}">${a.label} <i class="bi bi-arrow-right"></i></button>` : ""}
-        </div>
-      </div>`;
+    const quando =
+      diasProxima === 0 ? "Hoje" : diasProxima === 1 ? "Amanhã" : `Em ${diasProxima} dias`;
+    const pacProx = proximaConsulta
+      ? PACIENTES.find((p) => p.id === proximaConsulta.pacienteId)
+      : null;
+
+    const resumo =
+      `Você acompanha <strong>${_plural(meusCasos.length, "caso", "casos")}</strong>` +
+      (hojeAtivos > 0
+        ? ` e tem <strong>${_plural(hojeAtivos, "atendimento", "atendimentos")} hoje</strong>.`
+        : ` e não tem atendimentos hoje.`);
+
+    const linhasCasos = meusCasos
+      .map((p) => {
+        const evs = EVOLUCOES[p.id] || [];
+        const ultimaEv = _ultimaEvolucao(p.id);
+        const diffDias = ultimaEv ? _diasDesde(ultimaEv, hojeDate) : null;
+        const anamOk = ANAMNESES[p.id]?.status === "finalizada";
+        const urgCls =
+          diffDias === null || diffDias > 21 ? "due-crit" : diffDias > 7 ? "due-warn" : "";
+        const rotulo =
+          diffDias === null ? "Sem registro" : diffDias === 0 ? "Hoje" : `há ${diffDias} dias`;
+        return `<tr>
+          <td><div class="cell-person">${_avatar(p, "")}<div><div class="cell-name">${escapeHTML(p.nome)}</div><div class="cell-sub">${calcIdade(p.nascimento)} anos</div></div></div></td>
+          <td>${anamOk ? `<span class="badge badge-green"><i class="bi bi-check-lg"></i>Finalizada</span>` : `<span class="badge badge-amber"><i class="bi bi-clock"></i>Pendente</span>`}</td>
+          <td class="num">${evs.length}</td>
+          <td><span class="due ${urgCls}"><strong>${rotulo}</strong></span></td>
+          <td class="right"><button class="btn btn-secondary btn-sm" onclick="openProntuario(${p.id})">Abrir prontuário</button></td>
+        </tr>`;
       })
       .join("");
 
     return `
-    <div class="dash-welcome-bar">
+    <section class="dash-head">
       <div>
-        <div class="dash-welcome-title">Olá, ${escapeHTML(currentUser.nome.split(" ")[0])} <span style="font-size:18px">🩺</span></div>
-        <div class="dash-welcome-sub">Seus casos clínicos · ${new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })}</div>
+        <div class="dash-date">${_dataPorExtenso()}</div>
+        <h1 class="dash-greeting">${_saudacao()}, ${nome}</h1>
+        <p class="dash-summary">${resumo}</p>
       </div>
       ${
         proximaConsulta
-          ? `<div class="dash-proxima-pill">
-        <i class="bi bi-calendar-check" style="color:var(--sc-green)"></i>
-        <div>
-          <div style="font-size:11px;color:var(--text3)">Próximo atendimento</div>
-          <div style="font-size:13px;font-weight:700;color:var(--sc-green-dark)">${diasProxima === 0 ? "Hoje" : "Em " + diasProxima + "d"} · ${proximaConsulta.hora} · ${escapeHTML(PACIENTES.find((p) => p.id === proximaConsulta.pacienteId)?.nome || "—")}</div>
+          ? `<button type="button" class="next-up" onclick="openProntuario(${proximaConsulta.pacienteId})" style="text-align:left;cursor:pointer">
+        <div class="next-up-when"><b>${proximaConsulta.hora}</b><span>${quando}</span></div>
+        <div class="next-up-what">
+          <small>Próximo atendimento</small>
+          <strong>${escapeHTML(pacProx?.nome || "—")}</strong>
+          <small>${escapeHTML(proximaConsulta.local)}</small>
         </div>
-      </div>`
+        <i class="bi bi-chevron-right" style="color:var(--text4)" aria-hidden="true"></i>
+      </button>`
           : ""
       }
-    </div>
+    </section>
 
-    <div class="stats-grid" style="margin-bottom:20px">
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:var(--sc-green-pale);color:var(--sc-green-dark)"><i class="bi bi-folder2-open"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${meusCasos.length}</div>
-          <div class="dash-kpi-label">Meus Pacientes</div>
-        </div>
-        <div class="dash-kpi-trend trend-ok"><i class="bi bi-person-check"></i> Todos ativos</div>
-      </div>
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:${anamnesesPendentes > 0 ? "#fef3c7" : "#dcfce7"};color:${anamnesesPendentes > 0 ? "#92400e" : "#14532d"}"><i class="bi bi-file-earmark-medical"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${anamnesesOk}<span class="dash-kpi-sub">/ ${meusCasos.length}</span></div>
-          <div class="dash-kpi-label">Anamneses Finalizadas</div>
-          <div class="dash-kpi-bar"><div style="width:${meusCasos.length > 0 ? Math.round((anamnesesOk / meusCasos.length) * 100) : 100}%;background:${anamnesesPendentes > 0 ? "#f59e0b" : "#2e7d32"}"></div></div>
-        </div>
-        <div class="dash-kpi-trend ${anamnesesPendentes > 0 ? "trend-warn" : "trend-ok"}"><i class="bi ${anamnesesPendentes > 0 ? "bi-exclamation-circle" : "bi-check2"}"></i> ${anamnesesPendentes > 0 ? anamnesesPendentes + " pendente(s)" : "OK"}</div>
-      </div>
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:#dbeafe;color:#1e40af"><i class="bi bi-journal-text"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${totalEvs}</div>
-          <div class="dash-kpi-label">Evoluções Redigidas</div>
-        </div>
-        <div class="dash-kpi-trend trend-ok"><i class="bi bi-graph-up"></i> ${meusCasos.length > 0 ? (totalEvs / meusCasos.length).toFixed(1) + " / caso" : "—"}</div>
-      </div>
-      <div class="dash-kpi-card">
-        <div class="dash-kpi-icon" style="background:#ede9fe;color:#6d28d9"><i class="bi bi-calendar-event"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-value">${meusAgs.filter((a) => a.data >= hoje).length}</div>
-          <div class="dash-kpi-label">Consultas Futuras</div>
-        </div>
-        <div class="dash-kpi-trend ${agsHoje.length > 0 ? "trend-today" : "trend-ok"}"><i class="bi bi-calendar-day"></i> ${agsHoje.length > 0 ? agsHoje.length + " hoje" : "Nenhuma hoje"}</div>
-      </div>
-    </div>
+    <section class="kpi-strip" aria-label="Indicadores">
+      ${_kpi({
+        label: "Casos ativos",
+        value: meusCasos.length,
+        note: "Alocados a você",
+      })}
+      ${_kpi({
+        label: "Anamneses finalizadas",
+        value: anamnesesOk,
+        unit: `de ${meusCasos.length}`,
+        meter: meusCasos.length ? (anamnesesOk / meusCasos.length) * 100 : 100,
+        warn: anamnesesPendentes > 0,
+        note: anamnesesPendentes > 0 ? `${_plural(anamnesesPendentes, "pendente", "pendentes")}` : "Todas concluídas",
+        noteCls: anamnesesPendentes > 0 ? "is-warn" : "is-ok",
+      })}
+      ${_kpi({
+        label: "Evoluções registradas",
+        value: totalEvs,
+        note: meusCasos.length > 0 ? `${_fmtDecimal(totalEvs / meusCasos.length)} por caso` : "Sem casos ativos",
+      })}
+      ${_kpi({
+        label: "Atendimentos agendados",
+        value: futuras,
+        note: hojeAtivos > 0 ? `${hojeAtivos} hoje` : "Nenhum hoje",
+      })}
+    </section>
 
-    <div class="dash-row-2" style="margin-bottom:20px">
-      <div class="card" style="flex:1.3;min-width:0">
-        <div class="card-header">
-          <span class="card-title"><i class="bi bi-calendar3" style="color:var(--sc-green)"></i> Agenda da Semana</span>
-          <button class="btn btn-secondary btn-sm" onclick="navigate('agenda')">Ver tudo</button>
-        </div>
-        <div class="card-body" style="padding:0">
+    <div class="dash-layout">
+      <div class="dash-col">
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Meus casos</h2>
+            <button class="btn btn-ghost btn-sm" onclick="navigate('pacientes')">Ver todos</button>
+          </div>
           ${
-            proximos7.length === 0
-              ? `<div class="empty-state" style="padding:28px"><i class="bi bi-calendar-x" style="font-size:28px;color:var(--text3)"></i><p style="margin-top:8px;color:var(--text3)">Nenhum atendimento futuro agendado</p></div>`
-              : `<div class="table-responsive"><table style="min-width:auto"><thead><tr><th>Data</th><th>Hora</th><th>Paciente</th><th>Local</th><th>Status</th></tr></thead><tbody>
-            ${proximos7
-              .map((ag) => {
-                const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-                const isHoje = ag.data === hoje;
-                return `<tr style="${isHoje ? "background:#f0fdf4" : ""}">
-                <td><div style="font-weight:${isHoje ? "700" : "400"};color:${isHoje ? "var(--sc-green-dark)" : "inherit"};white-space:nowrap">${isHoje ? "<span style='font-size:10px;background:var(--sc-green);color:#fff;border-radius:3px;padding:1px 5px;margin-right:4px'>HOJE</span>" : ""}${_dashFmtDataLonga(ag.data)}</div></td>
-                <td style="font-weight:600">${ag.hora}</td>
-                <td><button class="dash-link-btn" onclick="openProntuario(${ag.pacienteId})">${escapeHTML(pac?.nome || "—")}</button></td>
-                <td style="font-size:12px">${escapeHTML(ag.local)}</td>
-                <td><span class="badge ${ag.status === "confirmado" ? "badge-green" : "badge-amber"}">${ag.status}</span></td>
-              </tr>`;
-              })
-              .join("")}
-            </tbody></table></div>`
+            meusCasos.length === 0
+              ? `<div class="empty-state compact"><i class="bi bi-folder2"></i><h3>Nenhum caso alocado</h3><p>Quando a coordenação alocar um paciente a você, ele aparece aqui.</p></div>`
+              : `<div class="table-responsive"><table><thead><tr><th>Paciente</th><th>Anamnese</th><th>Evoluções</th><th>Última evolução</th><th></th></tr></thead><tbody>${linhasCasos}</tbody></table></div>`
           }
-        </div>
-      </div>
-      <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:16px">
-        <div class="card" style="flex:1">
-          <div class="card-header"><span class="card-title"><i class="bi bi-lightning-charge-fill" style="color:#f59e0b"></i> Suas Pendências</span></div>
-          <div class="card-body" style="padding:12px;display:flex;flex-direction:column;gap:8px">${alertasHtml}</div>
-        </div>
-      </div>
-    </div>
+        </section>
 
-    <div class="card" style="margin-bottom:0">
-      <div class="card-header">
-        <span class="card-title"><i class="bi bi-people-fill" style="color:var(--sc-green)"></i> Meus Casos Clínicos</span>
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Próximos atendimentos</h2>
+            <button class="btn btn-ghost btn-sm" onclick="navigate('agenda')">Abrir agenda</button>
+          </div>
+          ${_proximosTable(proximos7, hoje, { mostrarEstudante: false })}
+        </section>
       </div>
-      <div class="card-body" style="padding:0">
-        <div class="table-responsive"><table style="min-width:auto"><thead><tr><th>Paciente</th><th>Anamnese</th><th>Evoluções</th><th>Últ. atendimento</th><th>Situação</th><th></th></tr></thead><tbody>
-        ${
-          meusCasos.length === 0
-            ? `<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text3)">Nenhum caso alocado.</td></tr>`
-            : meusCasos
-                .map((p) => {
-                  const evs = EVOLUCOES[p.id] || [];
-                  const ultimaEv =
-                    evs.length > 0
-                      ? evs[evs.length - 1].data?.substring(0, 10)
-                      : null;
-                  const diffDias = ultimaEv
-                    ? Math.round(
-                        (hojeDate - new Date(ultimaEv + "T12:00:00")) /
-                          86400000,
-                      )
-                    : null;
-                  const anam = ANAMNESES[p.id];
-                  const anamOk = anam?.status === "finalizada";
-                  const urg =
-                    diffDias === null
-                      ? {
-                          bg: "#fee2e2",
-                          text: "#7f1d1d",
-                          label: "Sem registro",
-                        }
-                      : diffDias > 21
-                        ? {
-                            bg: "#fee2e2",
-                            text: "#7f1d1d",
-                            label: diffDias + "d atrás",
-                          }
-                        : diffDias > 7
-                          ? {
-                              bg: "#fef3c7",
-                              text: "#78350f",
-                              label: diffDias + "d atrás",
-                            }
-                          : {
-                              bg: "#dcfce7",
-                              text: "#14532d",
-                              label:
-                                diffDias === 0 ? "Hoje" : diffDias + "d atrás",
-                            };
-                  return `<tr>
-                <td><div style="display:flex;align-items:center;gap:8px"><div class="patient-avatar" style="background:${p.cor};width:28px;height:28px;font-size:11px">${escapeHTML(p.ini)}</div><div><div style="font-weight:600;font-size:13px">${escapeHTML(p.nome)}</div><div style="font-size:10px;color:var(--text3)">${calcIdade(p.nascimento)} anos</div></div></div></td>
-                <td>${
-                  anamOk
-                    ? `<span class="badge badge-green"><i class="bi bi-check-lg"></i> Finalizada</span>`
-                    : `<span class="badge badge-amber"><i class="bi bi-clock"></i> Pendente</span>`
-                }</td>
-                <td style="font-weight:600">${evs.length}</td>
-                <td><span style="background:${urg.bg};color:${urg.text};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${ultimaEv ? _dashFmtDataLonga(ultimaEv) : "—"} <span style="opacity:.7">${urg.label}</span></span></td>
-                <td><span class="badge ${p.status === "ativo" ? "badge-green" : "badge-gray"}">${p.status}</span></td>
-                <td><button class="btn btn-secondary btn-sm" onclick="openProntuario(${p.id})"><i class="bi bi-file-medical"></i> Abrir</button></td>
-              </tr>`;
-                })
-                .join("")
-        }
-        </tbody></table></div>
+
+      <div class="dash-col">
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Hoje</h2>
+            <span class="card-sub">${_plural(hojeAtivos, "atendimento", "atendimentos")}</span>
+          </div>
+          ${_dayTimeline(agsHoje, { mostrarEstudante: false })}
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Pendências</h2>
+            ${qtdPend > 0 ? `<span class="count-pill is-warn">${qtdPend}</span>` : ""}
+          </div>
+          ${_taskList(tarefas.slice(0, 4))}
+        </section>
       </div>
     </div>`;
   }
@@ -739,166 +687,93 @@ export let chartCasosEstudanteInst = null;
 
 // ─────────────────────────────────────────────────────────────
 // renderDashboardCharts()
-// Renderiza todos os gráficos do dashboard após o HTML estar no DOM.
+// Renderiza os gráficos do dashboard após o HTML estar no DOM.
 //
-// Gráficos gerenciais (técnico/supervisor):
-//   chartAtendMes  → linha: atendimentos confirmados x cancelados por mês
-//   chartAnamneses → doughnut: conformidade CRP (anamneses finalizadas/pendentes)
-//
-// Gráfico estudante:
-//   chartMeusCasos → barras horizontais: evoluções por paciente
+//   chartAtendMes → barras agrupadas: realizados × cancelados/faltas
+//                   (últimos 6 meses). Cores validadas para daltonismo
+//                   e contraste (--chart-1 / --chart-2 no CSS); a
+//                   legenda é HTML, no cabeçalho do card, com totais.
 //
 // MANUTENÇÃO: para adicionar um gráfico, crie o <canvas> no renderDashboard()
 // e adicione o bloco new Chart() aqui. Use _destroyChart(id) antes para evitar
 // instâncias duplicadas ao navegar.
 // ─────────────────────────────────────────────────────────────
 export function renderDashboardCharts() {
-  const role = currentUser.papel;
-  const meusPacientes = getPacientesPermitidos();
-  const listaAtivos = meusPacientes.filter((p) => p.status === "ativo");
+  if (typeof Chart === "undefined") return;
 
-  const CHART_DEFAULTS = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: { callbacks: {} } },
-  };
+  const css = window.getComputedStyle(document.documentElement);
+  const tok = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  const C1 = tok("--chart-1", "#1a6b2e");
+  const C2 = tok("--chart-2", "#b97a1e");
+  const INK3 = tok("--text3", "#6f7d72");
+  const GRID = tok("--bg2", "#eef0ec");
 
-  // ── GRÁFICO 1 (gerencial): Atendimentos por mês — linha dupla ───────────
-  // Substitui o gráfico de barras por estudante (ilegível com 50 alunos).
-  // Mostra volume mensal de consultas confirmadas vs. canceladas/faltas.
+  Chart.defaults.font.family = tok("--font", "system-ui");
+  Chart.defaults.font.size = 12;
+  Chart.defaults.color = INK3;
+
   const ctxAtend = document.getElementById("chartAtendMes");
   if (ctxAtend) {
     _destroyChart("atendMes");
-
-    // Calcular últimos 6 meses
-    const meses = [];
-    const labMeses = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
-    const hoje = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
-      meses.push({ y: d.getFullYear(), m: d.getMonth(), label: labMeses[d.getMonth()] + "/" + String(d.getFullYear()).slice(2) });
-    }
-
-    const dataConfirmados = meses.map(({ y, m }) =>
-      AGENDAMENTOS.filter((a) => {
-        const d = new Date(a.data + "T12:00:00");
-        return d.getFullYear() === y && d.getMonth() === m && a.status === "confirmado";
-      }).length
-    );
-    const dataCancelados = meses.map(({ y, m }) =>
-      AGENDAMENTOS.filter((a) => {
-        const d = new Date(a.data + "T12:00:00");
-        return d.getFullYear() === y && d.getMonth() === m &&
-               (a.status === "cancelado" || a.status === "faltou");
-      }).length
-    );
+    const serie = _serieMensal();
+    const barra = {
+      borderRadius: { topLeft: 4, topRight: 4 },
+      borderSkipped: "bottom",
+      maxBarThickness: 22,
+      categoryPercentage: 0.62,
+      barPercentage: 0.86,
+    };
 
     _chartInsts["atendMes"] = new Chart(ctxAtend, {
-      type: "line",
+      type: "bar",
       data: {
-        labels: meses.map((m) => m.label),
+        labels: serie.labels,
         datasets: [
-          {
-            label: "Realizados",
-            data: dataConfirmados,
-            borderColor: "#1b5e20",
-            backgroundColor: "rgba(27,94,32,0.08)",
-            tension: 0.35,
-            pointRadius: 4,
-            pointHoverRadius: 6,
-            fill: true,
-            borderWidth: 2,
-          },
-          {
-            label: "Cancelados/Faltas",
-            data: dataCancelados,
-            borderColor: "#f59e0b",
-            backgroundColor: "rgba(245,158,11,0.07)",
-            tension: 0.35,
-            pointRadius: 4,
-            pointHoverRadius: 6,
-            fill: true,
-            borderWidth: 2,
-            borderDash: [5, 4],
-          },
+          { label: "Realizados", data: serie.realizados, backgroundColor: C1, hoverBackgroundColor: "#0f4c1e", ...barra },
+          { label: "Cancelados ou faltas", data: serie.cancelados, backgroundColor: C2, hoverBackgroundColor: "#94601a", ...barra },
         ],
       },
       options: {
-        ...CHART_DEFAULTS,
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        animation: { duration: 500 },
         plugins: {
-          legend: {
-            display: true, position: "top", align: "end",
-            labels: { usePointStyle: true, padding: 14, font: { size: 11 } },
-          },
+          legend: { display: false },
           tooltip: {
+            backgroundColor: "#18221b",
+            padding: { x: 12, y: 10 },
+            cornerRadius: 8,
+            titleFont: { weight: "600", size: 12.5 },
+            bodyFont: { size: 12.5 },
+            titleColor: "#fff",
+            bodyColor: "rgba(255,255,255,0.86)",
+            boxWidth: 8,
+            boxHeight: 8,
+            boxPadding: 5,
+            usePointStyle: true,
             callbacks: {
-              label: (ctx) => " " + ctx.dataset.label + ": " + ctx.parsed.y,
+              title: (items) => items[0].label.charAt(0).toUpperCase() + items[0].label.slice(1),
+              label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y}`,
             },
           },
         },
         scales: {
-          y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: "#f1f5f1" } },
-          x: { grid: { display: false } },
+          y: {
+            beginAtZero: true,
+            border: { display: false },
+            grid: { color: GRID, drawTicks: false },
+            ticks: { precision: 0, maxTicksLimit: 5, padding: 10 },
+          },
+          x: {
+            border: { color: tok("--border2", "#d3d9d0") },
+            grid: { display: false },
+            ticks: { padding: 6 },
+          },
         },
       },
     });
-  }
-
-  // ── GRÁFICO 2 (gerencial): Conformidade CRP — doughnut ──────────────────
-  const ctxAnam = document.getElementById("chartAnamneses");
-  if (ctxAnam) {
-    _destroyChart("anam");
-    let finalizadas = listaAtivos.filter((p) => ANAMNESES[p.id]?.status === "finalizada").length;
-    let pendentes = listaAtivos.length - finalizadas;
-    if (finalizadas === 0 && pendentes === 0) pendentes = 1;
-    _chartInsts["anam"] = new Chart(ctxAnam, {
-      type: "doughnut",
-      data: {
-        labels: ["Finalizadas", "Pendentes"],
-        datasets: [{
-          data: [finalizadas, pendentes],
-          backgroundColor: ["#1b5e20", "#f59e0b"],
-          borderWidth: 0,
-          hoverOffset: 4,
-        }],
-      },
-      options: {
-        ...CHART_DEFAULTS,
-        cutout: "68%",
-        plugins: {
-          legend: { display: true, position: "bottom", labels: { usePointStyle: true, padding: 8, font: { size: 10 } } },
-          tooltip: { callbacks: { label: (ctx) => " " + ctx.label + ": " + ctx.parsed } },
-        },
-      },
-    });
-    chartEvolucoesInst = _chartInsts["anam"];
-  }
-
-  // ── GRÁFICO 3 (estudante): Evoluções por caso ────────────────────────────
-  const ctxMeusCasos = document.getElementById("chartMeusCasos");
-  if (ctxMeusCasos && role === "estudante") {
-    _destroyChart("meusCasos");
-    const meusCasos = listaAtivos;
-    _chartInsts["meusCasos"] = new Chart(ctxMeusCasos, {
-      type: "bar",
-      data: {
-        labels: meusCasos.map((p) => p.nome.split(" ")[0]),
-        datasets: [{
-          label: "Evoluções",
-          data: meusCasos.map((p) => (EVOLUCOES[p.id] || []).length),
-          backgroundColor: "#1b5e20",
-          borderRadius: 6,
-        }],
-      },
-      options: {
-        ...CHART_DEFAULTS,
-        indexAxis: "y",
-        scales: {
-          x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: "#f1f5f1" } },
-          y: { grid: { display: false } },
-        },
-      },
-    });
+    chartTendenciaInst = _chartInsts["atendMes"];
   }
 }
 

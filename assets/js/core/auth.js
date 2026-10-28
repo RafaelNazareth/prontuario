@@ -6,20 +6,31 @@
 import { renderAcesso, renderAcessoPaciente, renderAuditoria, renderMeuProntuario } from "../pages/acesso.js";
 import { renderAgenda } from "../pages/agenda.js";
 import { openProntuario, renderDashboard, renderDashboardCharts } from "../pages/dashboard.js";
-import { _updateNotifBadge } from "../pages/notificacoes.js";
+import { _updateNotifBadge, startNotifBadgePolling } from "../pages/notificacoes.js";
 import { renderPacientes } from "../pages/pacientes.js";
-import { USERS, initData, logAudit, sanitizarUsuario } from "./store.js";
-import { resetarTempoInatividade, tempoInativo } from "./utils.js";
+import { initData, limparDados, setSessao } from "./store.js";
+import { iniciarControleInatividade, pararControleInatividade, toast } from "./utils.js";
+import { canAccessPage } from "./permissions.js";
+import { servidor } from "../infrastructure/jsonDataSource.js";
+import { exigirAceiteTermo, exigirTrocaSenha, renderPrivacidade } from "../pages/privacidade.js";
 
 export let currentUser = null;
 export let currentPage = "dashboard";
 export const SESSION_KEY = "pep_fcmscsp_session";
 
-export function saveSession(user, page) {
-  sessionStorage.setItem(
-    SESSION_KEY,
-    JSON.stringify({ userId: user.id, page: page || currentPage }),
-  );
+// Usada SOMENTE pela suíte de testes automatizados (tests/), para exercitar
+// core/permissions.js e os repositórios sem precisar simular um DOM completo
+// (doLogin/boot dependem de elementos de formulário e de renderizar a
+// aplicação inteira). Nunca chamar a partir de código de produção — currentUser
+// só deve mudar via doLogin()/doLogout()/boot().
+export function _setCurrentUserForTests(user) {
+  currentUser = user;
+}
+
+// A sessão de verdade é o cookie HttpOnly emitido pelo servidor; aqui só
+// se guarda a última página aberta (nenhum dado de identidade).
+export function saveSession(_user, page) {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ page: page || currentPage }));
 }
 export function loadSession() {
   try {
@@ -40,30 +51,37 @@ export function toggleMenu() {
 
 export const NAV_CONFIG = {
   tecnico: [
-    { section: "Principal" },
-    { id: "dashboard", icon: "bi-grid-1x2-fill", label: "Dashboard" },
-    { id: "pacientes", icon: "bi-people-fill", label: "Pacientes" },
+    { section: "Atendimento" },
+    { id: "dashboard", icon: "bi-house", label: "Visão geral" },
+    { id: "pacientes", icon: "bi-people", label: "Pacientes" },
     { id: "agenda", icon: "bi-calendar3", label: "Agenda" },
     { section: "Gestão" },
-    { id: "acesso", icon: "bi-shield-person-fill", label: "Acesso & Usuários" },
-    { id: "acesso-pac", icon: "bi-file-person-fill", label: "Acesso Paciente" },
-    { id: "auditoria", icon: "bi-clock-history", label: "Trilha de Auditoria" },
+    { id: "acesso", icon: "bi-person-gear", label: "Usuários e permissões" },
+    { id: "acesso-pac", icon: "bi-file-earmark-person", label: "Solicitações dos titulares" },
+    { id: "auditoria", icon: "bi-clock-history", label: "Auditoria" },
+    { section: "Conformidade" },
+    { id: "privacidade", icon: "bi-shield-lock", label: "Privacidade e normas" },
   ],
   supervisor: [
-    { section: "Principal" },
-    { id: "dashboard", icon: "bi-grid-1x2-fill", label: "Dashboard" },
-    { id: "pacientes", icon: "bi-people-fill", label: "Pacientes" },
+    { section: "Atendimento" },
+    { id: "dashboard", icon: "bi-house", label: "Visão geral" },
+    { id: "pacientes", icon: "bi-people", label: "Pacientes" },
     { id: "agenda", icon: "bi-calendar3", label: "Agenda" },
+    { section: "Conformidade" },
+    { id: "privacidade", icon: "bi-shield-lock", label: "Privacidade e normas" },
   ],
   estudante: [
-    { section: "Principal" },
-    { id: "dashboard", icon: "bi-grid-1x2-fill", label: "Dashboard" },
-    { id: "pacientes", icon: "bi-people-fill", label: "Meus Casos" },
-    { id: "agenda", icon: "bi-calendar3", label: "Minha Agenda" },
+    { section: "Atendimento" },
+    { id: "dashboard", icon: "bi-house", label: "Visão geral" },
+    { id: "pacientes", icon: "bi-people", label: "Meus casos" },
+    { id: "agenda", icon: "bi-calendar3", label: "Minha agenda" },
+    { section: "Conformidade" },
+    { id: "privacidade", icon: "bi-shield-lock", label: "Privacidade e normas" },
   ],
   paciente: [
-    { section: "Meu Prontuário" },
-    { id: "meu-prontuario", icon: "bi-file-medical-fill", label: "Prontuário" },
+    { section: "Paciente" },
+    { id: "meu-prontuario", icon: "bi-file-medical", label: "Meu prontuário" },
+    { id: "privacidade", icon: "bi-shield-lock", label: "Privacidade e direitos" },
   ],
 };
 
@@ -71,18 +89,48 @@ export const NAV_CONFIG = {
 // Em ES Modules evitamos efeitos colaterais no carregamento do módulo:
 // esta função é chamada explicitamente pelo main.js após todos os módulos
 // estarem prontos (DOMContentLoaded).
-export function boot() {
-  initData();
-  const sess = loadSession();
-  if (sess) {
-    const user = USERS.find((u) => u.id === sess.userId);
-    if (user) {
-      currentUser = sanitizarUsuario(user); // sem senha em memória
-      document.getElementById("login-page").classList.add("hidden");
-      document.getElementById("app").classList.remove("hidden");
-      initApp(sess.page);
-    }
+export async function boot() {
+  wireLoginKeydownShortcuts();
+  // Sessão existente? O servidor confere o cookie (e a inatividade).
+  try {
+    const sessao = await servidor.sessao();
+    await entrarComSessao(sessao, loadSession()?.page);
+  } catch (e) {
+    if (e.motivo === "inatividade") mostrarErroLogin("Sua sessão foi encerrada por inatividade. Entre novamente.");
+    else if (e instanceof TypeError)
+      mostrarErroLogin("Não foi possível falar com o servidor. Inicie o sistema com npm run dev e recarregue a página.");
+    else if (e.status !== 401) mostrarErroLogin(e.message);
   }
+}
+
+function mostrarErroLogin(msg) {
+  const err = document.getElementById("login-error");
+  if (!err) return;
+  err.innerHTML = `<i class="bi bi-exclamation-circle"></i> <span></span>`;
+  err.querySelector("span").textContent = msg;
+  err.style.display = "flex";
+}
+
+function resetarBotaoLogin() {
+  const btn = document.querySelector(".btn-login");
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = `<i class="bi bi-box-arrow-in-right"></i><span>Entrar</span>`;
+  }
+}
+
+// Fluxo comum a login e restauração de sessão: termo de uso, troca de
+// senha obrigatória, carga dos dados e abertura do app.
+async function entrarComSessao(sessao, pagina) {
+  setSessao(sessao);
+  currentUser = sessao.usuario;
+  if (sessao.termoPendente) await exigirAceiteTermo(sessao);
+  if (sessao.trocaObrigatoria) await exigirTrocaSenha({ obrigatoria: true });
+  await initData();
+  document.getElementById("login-page").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  iniciarControleInatividade(sessao.config);
+  initApp(pagina);
 }
 
 export function fillLogin(u, p) {
@@ -99,69 +147,84 @@ export function togglePw() {
       : "bi bi-eye-slash toggle-pw";
 }
 
-export function doLogin() {
+export async function doLogin() {
   const u = document.getElementById("login-user").value.trim(),
-    p = document.getElementById("login-pass").value.trim();
+    p = document.getElementById("login-pass").value;
   const err = document.getElementById("login-error");
   const btn = document.querySelector(".btn-login");
-
-  // Loading state
+  if (btn.disabled) return;
   btn.disabled = true;
   btn.innerHTML = `<span class="login-spinner"></span><span>Entrando...</span>`;
-
-  setTimeout(() => {
-    const user = USERS.find((x) => x.login === u && x.pass === p);
-    if (!user) {
-      err.style.display = "flex";
-      btn.disabled = false;
-      btn.innerHTML = `<i class="bi bi-box-arrow-in-right"></i><span>Entrar</span>`;
-      return;
-    }
-    err.style.display = "none";
-    currentUser = sanitizarUsuario(user); // nunca expõe senha em memória
-    const startPage =
-      user.papel === "paciente" ? "meu-prontuario" : "dashboard";
-    saveSession(currentUser, startPage);
-    logAudit("login", "Realizou login no sistema", "");
-    document.getElementById("login-page").classList.add("hidden");
-    document.getElementById("app").classList.remove("hidden");
-    initApp(startPage);
-    resetarTempoInatividade();
-  }, 300); // pequeno delay para feedback visual
+  err.style.display = "none";
+  try {
+    const sessao = await servidor.login(u, p);
+    document.getElementById("login-pass").value = "";
+    const startPage = sessao.usuario.papel === "paciente" ? "meu-prontuario" : "dashboard";
+    await entrarComSessao(sessao, startPage);
+    avisarUltimoAcesso(sessao.acesso);
+  } catch (e) {
+    mostrarErroLogin(e.message || "Usuário ou senha incorretos.");
+  } finally {
+    resetarBotaoLogin();
+  }
 }
 
-document.getElementById("login-pass").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") doLogin();
-});
-document.getElementById("login-user").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") doLogin();
-});
-export function doLogout() {
+// SBIS NGS1.02.15: após o login, informar último acesso e tentativas falhas.
+function avisarUltimoAcesso(acesso) {
+  if (!acesso) return;
+  const quando = acesso.ultimoAcesso
+    ? new Date(acesso.ultimoAcesso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })
+    : null;
+  const falhas = acesso.falhasDesdeUltimoAcesso || 0;
+  const msg =
+    (quando ? `Último acesso: ${quando}.` : "Primeiro acesso a esta conta.") +
+    (falhas ? ` ${falhas} ${falhas === 1 ? "tentativa" : "tentativas"} de login sem sucesso desde então.` : "");
+  toast(msg, falhas ? "warning" : "info");
+}
+
+// Chamada por boot() — não no carregamento do módulo (mesmo motivo já
+// documentado acima para a antiga IIFE: um módulo ES não deve ter efeitos
+// colaterais na hora de ser importado, e isso também torna as funções
+// puras de core/ testáveis em Node sem precisar de um DOM real).
+export function wireLoginKeydownShortcuts() {
+  document.getElementById("login-pass").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doLogin();
+  });
+  document.getElementById("login-user").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doLogin();
+  });
+}
+
+/**
+ * Encerra a sessão no servidor e volta à tela de login.
+ * @param {{motivo?:string}} [opts] motivo exibido na tela de login
+ */
+export async function doLogout(opts = {}) {
+  pararControleInatividade();
+  if (currentUser && opts.motivo !== "inatividade") await servidor.logout().catch(() => {});
   clearSession();
   currentUser = null;
+  limparDados();
+  document.getElementById("page-content").innerHTML = "";
+  document.querySelectorAll(".modal-overlay:not(#modal-overlay)").forEach((el) => el.remove());
+  document.getElementById("modal-overlay").classList.add("hidden");
   document.getElementById("app").classList.add("hidden");
   document.getElementById("login-page").classList.remove("hidden");
-  clearTimeout(tempoInativo);
-  // Resetar botão e campos de login para evitar estado travado ao trocar usuário
-  const btn = document.querySelector(".btn-login");
-  if (btn) {
-    btn.disabled = false;
-    btn.innerHTML =
-      '<i class="bi bi-box-arrow-in-right"></i><span>Entrar</span>';
-  }
+  resetarBotaoLogin();
   const userInput = document.getElementById("login-user");
   const passInput = document.getElementById("login-pass");
   if (userInput) userInput.value = "";
   if (passInput) passInput.value = "";
   const err = document.getElementById("login-error");
   if (err) err.style.display = "none";
+  if (opts.mensagem) mostrarErroLogin(opts.mensagem);
 }
 
 /* ============================================================  APP INIT E NAVEGAÇÃO  */
 export function initApp(restorePage) {
   const u = currentUser;
   const ROLE_LABELS = {
-    tecnico: "Psicólogo Técnico",
+    tecnico: "Psicólogo técnico",
     supervisor: "Supervisor",
     estudante: "Estudante",
     paciente: "Paciente",
@@ -172,33 +235,12 @@ export function initApp(restorePage) {
     estudante: "ctx-role-estudante",
     paciente: "ctx-role-paciente",
   };
-  const ROLE_ICONS = {
-    tecnico: "bi-person-badge-fill",
-    supervisor: "bi-mortarboard-fill",
-    estudante: "bi-book-fill",
-    paciente: "bi-heart-pulse-fill",
-  };
-
-  // Context card (topo da sidebar)
-  const ctxAvatar = document.getElementById("sb-avatar");
-  if (ctxAvatar) {
-    ctxAvatar.textContent = u.avatar;
-    ctxAvatar.style.background = u.color;
-  }
-  const sbName = document.getElementById("sb-name");
-  if (sbName)
-    sbName.textContent =
-      u.nome.split(" ")[0] + " " + (u.nome.split(" ")[1] || "");
+  // Rodapé da sidebar: avatar, nome e papel do usuário logado
   const sbRole = document.getElementById("sb-role");
   if (sbRole) {
-    sbRole.textContent = ROLE_LABELS[u.papel];
-    sbRole.className = "sidebar-ctx-role " + (ROLE_CSS[u.papel] || "");
-    const ic = document.createElement("i");
-    ic.className = "bi " + (ROLE_ICONS[u.papel] || "bi-person");
-    sbRole.prepend(ic);
+    sbRole.textContent = ROLE_LABELS[u.papel] || "";
+    sbRole.className = "sidebar-user-role " + (ROLE_CSS[u.papel] || "");
   }
-
-  // Footer avatar + nome
   const footerAvatar = document.getElementById("sb-avatar-footer");
   if (footerAvatar) {
     footerAvatar.textContent = u.avatar;
@@ -209,6 +251,7 @@ export function initApp(restorePage) {
 
   buildSidebar();
   setTimeout(_updateNotifBadge, 200);
+  startNotifBadgePolling();
   navigate(
     restorePage || (u.papel === "paciente" ? "meu-prontuario" : "dashboard"),
   );
@@ -250,19 +293,27 @@ export function buildSidebar() {
 export function navigate(page) {
   if (page.startsWith("prontuario_"))
     return openProntuario(parseInt(page.split("_")[1]));
+  // Guarda de rota: NAV_CONFIG só decide o que aparece no menu; sem esta
+  // checagem, chamar navigate('acesso') diretamente (ex.: pelo console)
+  // renderizava a tela de administração para qualquer papel.
+  if (!canAccessPage(page)) {
+    toast("Você não tem permissão para acessar esta página.", "error");
+    page = currentUser.papel === "paciente" ? "meu-prontuario" : "dashboard";
+  }
   currentPage = page;
   saveSession(currentUser, page);
   document
     .querySelectorAll(".nav-item")
     .forEach((el) => el.classList.toggle("active", el.dataset.page === page));
   const T = {
-    dashboard: "Dashboard",
-    pacientes: "Pacientes",
-    agenda: "Agenda",
-    acesso: "Acesso & Usuários",
-    "acesso-pac": "Acesso do Paciente",
-    auditoria: "Trilha de Auditoria",
-    "meu-prontuario": "Meu Prontuário",
+    dashboard: "Visão geral",
+    pacientes: currentUser.papel === "estudante" ? "Meus casos" : "Pacientes",
+    agenda: currentUser.papel === "estudante" ? "Minha agenda" : "Agenda",
+    acesso: "Usuários e permissões",
+    "acesso-pac": "Solicitações dos titulares",
+    privacidade: "Privacidade e normas",
+    auditoria: "Auditoria",
+    "meu-prontuario": "Meu prontuário",
   };
   document.getElementById("topbar-title").textContent = T[page] || page;
 
@@ -299,6 +350,9 @@ export function navigate(page) {
         break;
       case "meu-prontuario":
         pc.innerHTML = renderMeuProntuario();
+        break;
+      case "privacidade":
+        pc.innerHTML = renderPrivacidade();
         break;
     }
     pc.classList.remove("page-transitioning");

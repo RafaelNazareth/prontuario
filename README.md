@@ -5,6 +5,7 @@
 ### Sistema de prontuário clínico para o Serviço-Escola de Psicologia da Faculdade de Ciências Médicas da Santa Casa de São Paulo
 
 ![Status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow?style=for-the-badge)
+![Testes](https://img.shields.io/badge/testes-75%20passando-success?style=for-the-badge)
 ![Projeto Real](https://img.shields.io/badge/projeto-institucional%20real-success?style=for-the-badge)
 ![JS](https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 
@@ -22,110 +23,123 @@ Os dados manipulados são clínicos e sensíveis (contexto de **LGPD**), e os us
 
 ---
 
+## 🚀 Como acessar
+
+**Demonstração online:** [rafaelnazareth.github.io/prontuario](https://rafaelnazareth.github.io/prontuario/). Use um dos logins de teste abaixo; a senha de todos é `1234`.
+
+| Perfil | Login |
+|---|---|
+| Psicólogo técnico (responsável técnico) | `tecnico` |
+| Supervisor | `supervisor` |
+| Estudante | `estudante` |
+| Paciente | `paciente` |
+
+No GitHub Pages não há servidor, então o sistema entra sozinho em **modo demonstração**. A parte do servidor roda dentro do navegador, com as mesmas regras da versão completa. Os dados são fictícios e as alterações ficam salvas só no navegador de quem está testando; o selo "Demonstração" no topo permite restaurar os dados de exemplo.
+
+**Versão completa (local):** com Node.js 18+, rode `npm run dev` e acesse `http://localhost:5500`. Nesse modo, login, permissões e auditoria rodam no servidor e os dados ficam em `data/db.json`.
+
+---
+
 ## 🏗️ Como o projeto é estruturado hoje
 
-Sem bundler, sem framework de UI. O front-end roda como **ES Modules nativos do navegador** (`<script type="module" src="./assets/js/main.js">`), com o grafo de dependências resolvido pelos próprios `import`/`export`.
+Sem bundler e sem framework de UI. O front-end roda como **ES Modules nativos do navegador**, e o servidor é Node.js puro, sem dependências.
 
 ```
+index.html
 assets/
-├── css/
-│   └── styles.css          (2.867 linhas)
+├── css/styles.css
 └── js/
-    ├── main.js              → ponto de entrada: importa todos os módulos
-    │                           e expõe funções no window para os
-    │                           onclick/oninput inline do HTML
-    ├── core/
-    │   ├── auth.js           → sessão, login/logout, roteamento (navigate),
-    │   │                        montagem da sidebar por papel de usuário
-    │   ├── store.js           → dados em memória, persistência em
-    │   │                        localStorage e motor de permissões (RBAC)
-    │   └── utils.js           → busca global, toast de notificação,
-    │                            auto-logout por inatividade
-    ├── pages/                → uma função render*() por tela
-    │   ├── dashboard.js
-    │   ├── pacientes.js
-    │   ├── agenda.js
-    │   ├── acesso.js
-    │   └── notificacoes.js
-    └── modals/
-        └── modals.js          → abertura, validação e salvamento
-                                  de todos os modais do sistema
-index.html                     (311 linhas)
+    ├── main.js              → ponto de entrada; expõe funções para os onclick do HTML
+    ├── core/                → sessão e navegação, estado, permissões, datas, regras clínicas
+    ├── pages/               → uma função render*() por tela
+    ├── modals/              → formulários e ações de registro clínico
+    ├── repositories/        → acesso aos dados por entidade
+    ├── shared/              → regras usadas pelo servidor e pelo modo demonstração:
+    │                          permissões, auditoria, política de senha, configuração
+    └── infrastructure/      → comunicação com a API e servidor simulado (demonstração)
+server/                      → servidor Node: autenticação, API, auditoria, backup cifrado
+data/seed.json               → dados de demonstração (fictícios)
+scripts/                     → geração de agenda e restauração de backup
+tests/                       → 75 testes automatizados (node:test)
+docs/                        → guia técnico, conformidade e documentação de arquitetura
 ```
 
-No total, cerca de **5.700 linhas de JavaScript** distribuídas nesses módulos, mais **2.867 linhas de CSS** e o `index.html`.
+O sistema começou como um único `app.js`, foi modularizado em ES Modules e depois ganhou um servidor próprio para tirar do navegador as decisões de segurança.
 
-### Essa não é a primeira versão
-
-O sistema começou como um único arquivo `app.js`, crescendo por funcionalidade (dashboard, agenda, notificações, controle de faltas) sem separação de responsabilidades. Em algum momento ficou difícil localizar onde cada regra vivia e o que dependia do quê — o motivo real de eu partir para a modularização.
-
-A divisão atual em `core` / `pages` / `modals`, com `main.js` como ponto único de entrada, foi o resultado dessa reorganização: separar **dados e regras de acesso** (`store.js`), **sessão e navegação** (`auth.js`), **renderização por tela** (`pages/`) e **interações de formulário** (`modals/`), em vez de manter tudo misturado num arquivo só.
-
-Um efeito colateral direto de migrar para ES Modules: como módulos não compartilham escopo global automaticamente, os `onclick`/`oninput` inline que já existiam no HTML pararam de enxergar as funções. A solução foi centralizar no `main.js` a exposição explícita dessas funções via `Object.assign(window, {...})` — uma ponte deliberada entre o mundo modular do JS e o HTML que ainda chama funções por atributo inline.
+Detalhes de arquitetura, scripts e dados estão no [guia técnico](docs/GUIA_TECNICO.md).
 
 ---
 
 ## 🔐 Decisões pensadas para dados clínicos reais
 
-**Controle de acesso por papel (RBAC).** A função `getPacientesPermitidos()` em `store.js` é o motor central de quem vê o quê:
+O sistema foi revisado contra as normas do **Conselho Federal de Psicologia**, a **LGPD** e o manual de certificação de prontuários eletrônicos da **SBIS**. A matriz completa, com cada requisito, a fonte e onde está no código, está em [docs/CONFORMIDADE.md](docs/CONFORMIDADE.md).
 
-| Papel | O que enxerga |
-|---|---|
-| `tecnico` | Todos os pacientes da clínica |
-| `supervisor` | Apenas pacientes onde é o supervisor responsável |
-| `estudante` | Apenas os pacientes que atende |
-| `paciente` | Apenas o próprio cadastro |
+**Segurança decidida no servidor.**
+- Cada papel recebe só os pacientes que pode ver: o técnico vê todos; o supervisor, os que supervisiona; o estudante, os do seu grupo; o paciente, só o próprio prontuário.
+- Toda gravação é conferida item a item antes de ir para o disco.
 
-Essa função é chamada por toda tela que lista pacientes, então o filtro por papel acontece num único lugar — não replicado em cada `render*()`.
+**Senhas e sessão.**
+- Senhas guardadas com hash scrypt e salt.
+- Bloqueio após 5 tentativas erradas e mensagem de erro genérica.
+- Sessão em cookie HttpOnly, encerrada após 15 minutos sem atividade, com aviso antes.
 
-**Senha nunca fica em memória.** `sanitizarUsuario()` remove o campo `pass` do objeto de usuário antes de guardá-lo em `currentUser`, tanto no login quanto na restauração de sessão.
+**Prontuário conforme o CFP.**
+- Seções obrigatórias: identificação, avaliação de demanda, objetivos, evoluções, encerramento e cópias dos documentos emitidos.
+- Supervisões e material de testes ficam num registro documental separado, que o paciente não acessa.
 
-**Sessão expira sozinha.** Um timer de inatividade (`resetarTempoInatividade`, em `utils.js`) reinicia a cada movimento de mouse, tecla ou toque; passados 10 minutos sem atividade, o sistema desloga automaticamente.
+**Assinatura do estagiário e do supervisor.** Evoluções, avaliações e documentos de estagiários só valem depois da co-assinatura do supervisor do caso.
 
-**Escape de HTML.** Como as telas são montadas via `innerHTML` a partir de dados do usuário (nome do paciente, anotações, etc.), existe uma função `escapeHTML()` usada nesses pontos para reduzir risco de XSS.
+**Nada é apagado.** Correções são retificações feitas pelo próprio autor, com justificativa, e a versão anterior continua visível.
 
-**Honestidade sobre os limites da persistência atual.** Os dados hoje ficam em `localStorage`, ofuscados em Base64 — e isso está documentado no próprio código, sem maquiagem:
+**Trilha de auditoria.**
+- Registra quem consultou, imprimiu ou alterou cada prontuário, com IP, sem dados clínicos no log.
+- Cada registro está encadeado ao anterior por hash, então qualquer adulteração é detectada.
 
-```js
-// ATENÇÃO: btoa/atob é ofuscação Base64, NÃO criptografia real.
-// Para produção, substituir por AES-GCM via SubtleCrypto ou mover para backend seguro.
-```
-
-Prefiro deixar essa limitação explícita no código a fingir que já está resolvida — é o próximo passo real do projeto, não um detalhe escondido.
-
-**Trilha de auditoria.** Ações como login são registradas via `logAudit()` numa lista `AUDITORIA`, com uma tela dedicada (`Trilha de Auditoria`) para técnicos revisarem o histórico.
-
-**Migração de dados versionada.** A chave de armazenamento (`pep_fcmscsp_data_v14`) carrega no próprio nome o número da versão do formato dos dados, com comentário explicando o que mudou na versão atual — uma forma simples de rastrear evolução do schema sem banco de dados.
+**Direitos do paciente.**
+- Portal com acesso integral ao próprio prontuário.
+- Solicitações pela LGPD com prazo de 15 dias.
+- Consentimentos versionados e revogáveis, com autorização do responsável para menores.
 
 ---
 
 ## ✨ Funcionalidades implementadas
 
-- Login com sessão persistida (`sessionStorage`) e 4 papéis de usuário distintos
-- Dashboard com gráficos (Chart.js)
-- Cadastro, edição e prontuário completo de pacientes (dados, anamnese, evoluções, documentos, agenda do paciente)
-- Agenda com navegação por semana
-- Controle de acesso e solicitações de acesso ao prontuário
-- Registro e justificativa de faltas, troca de paciente entre estudantes
-- Central de notificações com badge
-- Busca global de pacientes
-- Interface responsiva (mobile-first)
+- **Login:** quatro papéis, aceite de aviso de privacidade e termo de sigilo, troca de senha e bloqueio por tentativas.
+- **Dashboard:** indicadores, gráfico de atendimentos, agenda do dia e pendências, incluindo validações do supervisor.
+- **Prontuário completo:**
+  - avaliação de demanda e objetivos;
+  - evoluções com validação e retificação;
+  - documentos;
+  - termos e comunicações;
+  - registro documental;
+  - agenda do paciente.
+- **Documentos psicológicos conforme a Res. CFP 06/2019:**
+  - declaração, atestado, relatório, laudo e parecer;
+  - impressão com páginas numeradas, protocolo de entrega e devolutiva.
+- **Agenda semanal** até dezembro de 2026, com registro de faltas e troca de paciente.
+- **Encerramento de atendimento** com motivo e encaminhamento.
+- **Gestão de usuários:** inativação em vez de exclusão, CRP e matrícula.
+- **Auditoria:** filtros, exportação CSV e verificação de integridade.
+- **Backup cifrado (AES-256-GCM)** com restauração verificada.
+- **Interface responsiva.**
 
 ---
 
 ## 🚧 O que ainda não existe
 
-- Backend e banco de dados — hoje é 100% front-end com `localStorage`
-- Criptografia real dos dados sensíveis (só há ofuscação Base64, como documentado no código)
-- Testes automatizados — ainda não escrevi nenhum
+- **Publicação para uso real:** precisa de hospedagem com Node.js, HTTPS e disco cifrado. O GitHub Pages serve apenas a demonstração.
+- **Assinatura com certificado digital ICP-Brasil:** hoje a assinatura é eletrônica, por login individual mais o hash do conteúdo.
+- **Verificação em duas etapas (MFA).**
+- **Banco de dados:** os dados ficam em um arquivo JSON gravado pelo servidor; está planejada a migração para banco de dados.
 
 ---
 
 ## 🗺️ Próximos passos
 
-- [ ] Escrever a primeira suíte de testes automatizados, começando pelo motor de permissões (`getPacientesPermitidos`) por ser a regra mais crítica do sistema
-- [ ] Construir backend com persistência em banco de dados real
-- [ ] Substituir a ofuscação Base64 por criptografia real dos dados sensíveis
+- [ ] Publicar a versão completa em hospedagem com Node.js e HTTPS
+- [ ] Cumprir o checklist institucional de [docs/CONFORMIDADE.md](docs/CONFORMIDADE.md): encarregado de dados, plano de incidentes e troca das senhas de demonstração
+- [ ] Migrar a persistência para banco de dados
+- [ ] Avaliar assinatura com certificado ICP-Brasil e MFA
 - [ ] Implantação para uso real pelo Serviço-Escola de Psicologia da FCMSCSP
 
 ---
