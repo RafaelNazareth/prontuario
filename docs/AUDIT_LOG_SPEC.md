@@ -53,7 +53,7 @@ Lista completa em `EVENTOS` (`assets/js/shared/auditoria.js`). Registrar um tipo
 - `consulta_prontuario`, `consulta_documento`, `consulta_registro_documental`
 - `arquivo_baixado` (download do arquivo anexado; gravado pelo servidor ao entregar o arquivo)
 - `impressao`, `exportacao`
-- `consulta_auditoria` (registrado só na primeira página de cada consulta, para que folhear não gere um evento por página), `exportacao_auditoria`
+- `consulta_auditoria` (registrado em toda consulta, com os filtros e a página vista), `exportacao_auditoria`
 
 Os eventos de consulta, impressão e exportação do prontuário são informados pela tela (`POST /api/audit/evento`), porque acontecem no navegador; o servidor só aceita esses tipos (`EVENTOS_INFORMADOS_PELO_CLIENTE`), confere que o paciente está no escopo do usuário e carimba usuário, IP e horário.
 

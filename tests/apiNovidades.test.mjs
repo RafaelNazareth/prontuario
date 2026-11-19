@@ -214,4 +214,9 @@ test("auditoria paginada", async () => {
   assert.equal(p1.pagina, 1);
   assert.ok(p1.paginas >= 2);
   assert.notEqual(p1.entradas[0].id, p2.entradas[0].id);
+  // toda página consultada fica registrada, inclusive com número fora do padrão
+  await tec.json("GET", "/api/audit?porPagina=10&pagina=01");
+  const consultas = lerDb().AUDITORIA.filter((e) => e.tipo === "consulta_auditoria");
+  assert.ok(consultas.some((e) => /página 2/.test(e.complemento)));
+  assert.equal(consultas.filter((e) => /página 1$/.test(e.complemento)).length >= 2, true);
 });

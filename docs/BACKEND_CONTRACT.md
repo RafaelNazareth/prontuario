@@ -72,7 +72,7 @@ Regras aplicadas em `PUT /api/data` (resumo; detalhes em [DOMAIN_MODEL.md](./DOM
 | Rota | Quem | O que faz |
 |---|---|---|
 | `POST /api/audit/evento` | logado | `{ tipo, pacienteId?, registroId?, complemento? }`. Só aceita eventos de leitura que acontecem na tela (consulta de prontuário, documento ou registro documental, impressão, exportação). Paciente fora do escopo: `403`. |
-| `GET /api/audit` | técnico | Filtros `de`, `ate`, `tipo`, `userId`, `pacienteId`; paginação `pagina` e `porPagina` (padrão 50). Resposta com a página, o total e a verificação de integridade da trilha. A consulta é auditada na primeira página. |
+| `GET /api/audit` | técnico | Filtros `de`, `ate`, `tipo`, `userId`, `pacienteId`; paginação `pagina` e `porPagina` (padrão 50). Resposta com a página, o total e a verificação de integridade da trilha. Toda consulta é auditada, com os filtros e a página. |
 | `GET /api/audit/csv` | técnico | Exportação CSV com os mesmos filtros, auditada. |
 
 Vocabulário de eventos em [AUDIT_LOG_SPEC.md](./AUDIT_LOG_SPEC.md).

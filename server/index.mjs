@@ -586,12 +586,12 @@ const rotas = {
     const { pagina: _pg, porPagina: _pp, ...filtros } = q;
     const verificacao = verificarTrilha(dados.AUDITORIA);
     const entradas = filtrarTrilha(dados.AUDITORIA, filtros);
-    // A consulta só é auditada na primeira página (folhear não gera um evento por página).
-    if (!q.pagina || q.pagina === "1") {
-      auditar(dados, req, user, "consulta_auditoria", { complemento: new URLSearchParams(filtros).toString() || "sem filtros" });
-      await db.gravar(dados);
-    }
-    enviarJson(res, 200, { ...paginar(entradas, q), verificacao, eventos: EVENTOS });
+    const pagina = paginar(entradas, q);
+    // Toda consulta à trilha é auditada, com os filtros e a página vista.
+    const complemento = `${new URLSearchParams(filtros).toString() || "sem filtros"} · página ${pagina.pagina}`;
+    auditar(dados, req, user, "consulta_auditoria", { complemento });
+    await db.gravar(dados);
+    enviarJson(res, 200, { ...pagina, verificacao, eventos: EVENTOS });
   },
 
   "GET /api/audit/csv": async (req, res) => {

@@ -587,8 +587,27 @@ function mesclarFaltas(ctx, entrada = []) {
     exigirPaciente(ctx, atual ? atual.pacienteId : f.pacienteId);
     if (!atual) {
       exigirIdSeguro(f.id);
-      db.FALTAS.push({ ...clone(f), registradoPorId: user.id, ts: agoraISO() });
-      ctx.ev("falta_registrada", f.pacienteId, f.id);
+      // A falta nasce de um atendimento do mesmo paciente e sempre sem
+      // justificativa: justificar é outra etapa, só do técnico ou do supervisor.
+      const pid = Number(f.pacienteId);
+      const ag = db.AGENDAMENTOS.find((a) => String(a.id) === String(f.agId));
+      if (!ag || ag.pacienteId !== pid || !["confirmado", "faltou"].includes(ag.status))
+        recusar("A falta precisa se referir a um atendimento deste paciente.");
+      if (db.FALTAS.some((x) => String(x.agId) === String(ag.id))) recusar("Já existe falta registrada para este atendimento.");
+      const nova = {
+        id: String(f.id),
+        agId: ag.id,
+        pacienteId: pid,
+        data: ag.data,
+        hora: ag.hora,
+        estudantesIds: ctx.db.PACIENTES.find((p) => p.id === pid)?.estudantesIds || [],
+        registradoPor: user.nome,
+        registradoPorId: user.id,
+        justificada: false,
+        ts: agoraISO(),
+      };
+      db.FALTAS.push(nova);
+      ctx.ev("falta_registrada", pid, nova.id);
       continue;
     }
     const mud = camposAlterados(atual, f);

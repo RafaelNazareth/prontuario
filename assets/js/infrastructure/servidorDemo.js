@@ -425,10 +425,11 @@ const rotas = {
     const { pagina, porPagina, ...filtros } = q;
     const verificacao = verificarTrilha(d.AUDITORIA);
     const entradas = filtrarTrilha(d.AUDITORIA, filtros);
-    if (!pagina || pagina === "1") auditar(d, user, "consulta_auditoria", { complemento: new URLSearchParams(filtros).toString() || "sem filtros" });
     const tam = Math.min(Math.max(Number(porPagina) || 50, 10), 500);
     const paginas = Math.max(1, Math.ceil(entradas.length / tam));
     const atual = Math.min(Math.max(Number(pagina) || 1, 1), paginas);
+    // Toda consulta à trilha é auditada, com os filtros e a página vista.
+    auditar(d, user, "consulta_auditoria", { complemento: `${new URLSearchParams(filtros).toString() || "sem filtros"} · página ${atual}` });
     return {
       total: entradas.length,
       pagina: atual,

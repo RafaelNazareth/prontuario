@@ -131,7 +131,7 @@ Legenda de status: **✅ implementado** · **🟡 parcial** · **⛔ fora do esc
 | Eventos: login com e sem sucesso, bloqueio, logout, expiração, senha, aceite de termo, gestão de usuários (cadastro, edição, redefinição de senha, acesso temporário do paciente, desbloqueio, inativação), **consulta** de prontuário, documento e registro documental, **download de arquivo**, impressão, exportação, criação, validação e retificação de registros, agenda e faltas, pedidos de agendamento, consentimentos, compartilhamentos, solicitações do titular, backup e restauração | ✅ | Lista em `EVENTOS` (`shared/auditoria.js`); ver [AUDIT_LOG_SPEC.md](AUDIT_LOG_SPEC.md) |
 | Campos: ID, data e hora com fuso, evento, IP, usuário, paciente e registro por ID | ✅ | |
 | Sem dado clínico ou nome do paciente no log | ✅ | Só IDs; a tela resolve os nomes para o técnico |
-| Consulta com filtros (data, evento, usuário, paciente) e acesso só do auditor | ✅ | Página Auditoria (técnico), paginada pelo servidor (50 por página); a própria consulta é auditada uma vez, na primeira página |
+| Consulta com filtros (data, evento, usuário, paciente) e acesso só do auditor | ✅ | Página Auditoria (técnico), paginada pelo servidor (50 por página); toda consulta é auditada, com os filtros e a página |
 | Exportação em CSV com identificação do software e da instituição | ✅ | `GET /api/audit/csv` |
 
 ## 9. LGPD: direitos do titular, transparência e guarda

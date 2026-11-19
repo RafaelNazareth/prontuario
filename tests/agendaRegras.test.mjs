@@ -162,3 +162,20 @@ test("id de registro novo com aspas ou parênteses é recusado (XSS armazenado)"
   const doc = { id: "d\" onmouseover=\"x", nome: "a.pdf", tipo: "pdf", categoria: "outro" };
   assert.equal(aplicarAlteracoes(d, user(d, TECNICO), { DOCUMENTOS: { [PACIENTE]: [doc] } }).ok, false);
 });
+
+test("falta nasce sem justificativa e só de atendimento do mesmo paciente", () => {
+  const d = carregar();
+  const est = user(d, ESTUDANTE);
+  const ag = futuroConfirmado(d);
+  const forjada = { id: "falta_t1", agId: ag.id, pacienteId: PACIENTE, justificada: true, justificativa: "atestado", justificadaPorId: 1 };
+  const r = aplicarAlteracoes(d, est, { AGENDAMENTOS: [{ ...clone(ag), status: "faltou" }], FALTAS: [forjada] });
+  assert.equal(r.ok, true, r.erro);
+  const salva = r.db.FALTAS.find((f) => f.id === "falta_t1");
+  assert.equal(salva.justificada, false);
+  assert.equal(salva.justificativa, undefined);
+  assert.equal(salva.justificadaPorId, undefined);
+  assert.equal(salva.registradoPorId, ESTUDANTE);
+  // atendimento de outro paciente é recusado
+  const alheio = d.AGENDAMENTOS.find((a) => a.pacienteId !== PACIENTE);
+  assert.equal(aplicarAlteracoes(d, user(d, TECNICO), { FALTAS: [{ id: "falta_t2", agId: alheio.id, pacienteId: PACIENTE }] }).ok, false);
+});
