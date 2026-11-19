@@ -1,70 +1,81 @@
-# Guia de Migração: Mock → Backend Real — PEP (FCMSCSP)
+# Guia de Migração: banco JSON → MongoDB — PEP (FCMSCSP)
 
-Plano passo a passo para substituir o mock atual por um backend Java + MongoDB, sem reescrever o frontend. Nenhuma dessas fases está implementada — este é o roteiro para a próxima etapa do projeto.
-
-## Princípio geral
-
-A camada de repositórios (`assets/js/repositories/*.js`) é o único lugar que muda. Hoje cada repositório importa de `core/store.js` (arrays em memória + `localStorage`); a migração troca essa importação por um cliente HTTP (`infrastructure/api/*ApiClient.js`), mantendo a **mesma assinatura de função** (`list()`, `getById()`, `create()`...). Nenhuma tela (`pages/*.js`, `modals/*.js`) deveria precisar mudar.
+O plano original deste guia (trocar um mock no navegador por um backend Java) não vale mais: o backend é o servidor **Node.js** do repositório, que já faz autenticação, autorização, auditoria e gravação. O que resta migrar é o **banco**: do arquivo `data/db.json` para o MongoDB. O servidor e a interface não mudam.
 
 ```mermaid
 flowchart LR
-    subgraph Antes
-        UI1[pages / modals] --> R1[repositories/*.js] --> Store[core/store.js] --> LS[(localStorage)]
+    subgraph Hoje [Padrão]
+        UI1[Navegador] --> S1[server/index.mjs] --> J[(data/db.json + data/arquivos/)]
     end
-    subgraph Depois
-        UI2[pages / modals] --> R2[repositories/*.js] --> API[infrastructure/api/*ApiClient.js] --> Backend[API Java] --> Mongo[(MongoDB)]
+    subgraph Depois [PEP_BANCO=mongodb]
+        UI2[Navegador] --> S2[server/index.mjs] --> M[(MongoDB)]
     end
 ```
 
-## Fases
+## O que já existe
 
-### Fase 1 — Frontend mock (estado atual, concluído)
-- Mock isolado em `infrastructure/mock/mockData.js`.
-- Repositórios já existem e já são o ponto de acesso a dado usado pelas telas mais críticas (criação/edição/aprovação).
-- **Dependências:** nenhuma. **Riscos:** nenhum (é o estado atual). **Testes:** ver `tests/`.
+- Adaptador MongoDB (`server/banco/mongodb.mjs`) com a mesma interface do banco JSON. Coleções e índices em [DATABASE_MONGODB.md](./DATABASE_MONGODB.md).
+- Script de migração `npm run data:migrar-mongodb` (`scripts/migrar-para-mongodb.mjs`).
+- Restauração de backup para os dois bancos (`npm run data:restaurar`).
+- Testes automatizados da conversão e do adaptador (`tests/mongodb.test.mjs`).
 
-### Fase 2 — API Java (esqueleto)
-- Subir a API Java com autenticação (`POST /auth/login`) e um único endpoint real (`GET /patients`) para validar a integração ponta a ponta antes de migrar tudo.
-- **Endpoints:** ver [BACKEND_CONTRACT.md](./BACKEND_CONTRACT.md) (auth + pacientes).
-- **Collections:** `users`, `patients` (ver [DATABASE_MONGODB.md](./DATABASE_MONGODB.md)).
-- **Mudanças no frontend:** criar `infrastructure/api/httpClient.js` (fetch com header `Authorization`, tratamento de erro padronizado) e `infrastructure/api/patientApiClient.js`. Trocar a implementação de `patientRepository.js` para usar o client de API **atrás de um feature flag** (`core/config.js: USE_MOCK_BACKEND`), permitindo alternar entre mock e API real sem duas versões de código.
-- **Riscos:** autenticação — o fluxo de login muda de comparação local para chamada de rede; testar exaustivamente os 4 papéis.
-- **Testes:** repetir a suíte de `tests/permissions.test.js` como teste de integração contra a API real.
+Nenhum ambiente de produção foi migrado ainda; a migração da produção depende da publicação para uso real.
 
-### Fase 3 — Autenticação completa
-- Login, refresh token, logout via API.
-- **Mudanças no frontend:** `core/auth.js::doLogin/doLogout` passam a chamar a API em vez de `USERS.find()`. `sanitizarUsuario()` deixa de ser necessário (a API nunca retorna senha).
-- **Riscos:** sessão expirada precisa de tratamento explícito (hoje não existe conceito de "token expirado" no mock).
+## Passo a passo
 
-### Fase 4 — Pacientes
-- Migrar `patientRepository.js` de fato (não só atrás de flag) para a API.
-- **Mudanças no frontend:** nenhuma em `pages/pacientes.js` (é o objetivo do desenho). Paginação real precisa ser adotada na UI (ver [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md), item 7) antes desta fase em produção, se o volume de pacientes justificar.
+### 1. Preparar
 
-### Fase 5 — Agendamentos
-- Migrar `appointmentRepository.js`. Validar a lógica de conflito de horário no backend (ver [BACKEND_CONTRACT.md](./BACKEND_CONTRACT.md)).
+- MongoDB 6+ acessível pelo servidor, de preferência com replica set (transações) e cifragem em repouso.
+- Um usuário do MongoDB só para o PEP, com leitura e escrita no banco escolhido.
+- `npm ci` (instala o driver `mongodb`, que está em `optionalDependencies`).
+- Anote onde está a chave dos arquivos anexados: `PEP_ARQUIVOS_KEY` ou `data/.arquivos-key`. **Ela tem de ir junto.**
 
-### Fase 6 — Prontuário clínico (anamnese + evolução)
-- Migrar `clinicalRepository.js`. **Ponto de maior atenção:** a regra de imutabilidade (anamnese finalizada, evolução sempre append-only) precisa estar corretamente implementada no backend **antes** desta fase — é a regra mais sensível do domínio.
+### 2. Parar o servidor e fazer um backup
 
-### Fase 7 — Documentos
-- Migrar `documentRepository.js` **e** implementar upload real (hoje é 100% simulado). Ver [DATABASE_MONGODB.md](./DATABASE_MONGODB.md) sobre armazenamento de binário fora do MongoDB.
+```bash
+# servidor parado
+cp data/db.json data/db.antes-do-mongodb.json
+```
 
-### Fase 8 — Notificações
-- Migrar `notificationRepository.js`. Decidir se a lógica de "evolução pendente" (calculada em tempo real hoje) migra para um job no backend ou continua calculada sob demanda no `GET /notifications`.
+Guarde também uma cópia de `data/arquivos/` e de `data/backups/`.
 
-### Fase 9 — Auditoria
-- Migrar `auditRepository.js` (leitura) e trocar `logAudit()` (`core/store.js`) para uma chamada de API — ou, melhor ainda, deixar de existir no frontend: o backend deve auditar a própria requisição recebida, sem depender do frontend "avisar" que algo aconteceu (ver [AUDIT_LOG_SPEC.md](./AUDIT_LOG_SPEC.md)).
+### 3. Migrar
 
-### Fase 10 — Remover o mock
-- Apagar `infrastructure/mock/` e a flag `USE_MOCK_BACKEND`.
-- Remover as credenciais de demonstração do `README.md`.
-- **Só fazer esta fase depois que todas as anteriores estiverem em produção e validadas** — até lá, o mock continua sendo o que permite demonstrar e validar o sistema com o cliente.
+```bash
+PEP_MONGODB_URI="mongodb://usuario:senha@host:27017/?authSource=admin" \
+PEP_MONGODB_BANCO=pep \
+npm run data:migrar-mongodb
+```
 
-## Checklist por fase (repetir para cada uma)
+O script:
 
-- [ ] Endpoints da fase implementados e testados no backend (ver [BACKEND_CONTRACT.md](./BACKEND_CONTRACT.md))
-- [ ] `ApiClient` correspondente criado em `infrastructure/api/`
-- [ ] Repositório correspondente trocado (mock → API), mesma assinatura pública
-- [ ] Testes da fase passando contra a API real (não só contra o mock)
-- [ ] Nenhuma tela (`pages/`, `modals/`) precisou mudar — se precisou, é sinal de que a interface do repositório vazou detalhe de implementação e deve ser revista
-- [ ] Auditoria da fase revisada em produção antes de seguir para a próxima
+1. lê `data/db.json` e avisa se a trilha de auditoria de origem não estiver íntegra (ela é copiada como está);
+2. para, sem mexer em nada, se o banco de destino já tiver usuários (use `npm run data:migrar-mongodb -- --substituir` para sobrescrever);
+3. grava todas as coleções e copia os arquivos de `data/arquivos/*.bin` para a coleção `arquivos`, **ainda cifrados** (não precisa da chave para copiar, mas o servidor precisará dela para abrir);
+4. relê o banco e compara a quantidade de registros de cada coleção com a origem; se algo divergir, termina com erro.
+
+### 4. Subir o servidor no MongoDB
+
+```bash
+PEP_BANCO=mongodb PEP_MONGODB_URI="mongodb://..." PEP_ARQUIVOS_KEY=<a mesma chave> npm start
+```
+
+O console mostra `Banco: MongoDB, banco "pep"`.
+
+### 5. Conferir
+
+- [ ] Entrar com cada papel e abrir alguns prontuários.
+- [ ] Baixar um arquivo anexado (confere a chave e o SHA-256).
+- [ ] Abrir a Auditoria como técnico: a trilha deve aparecer como íntegra.
+- [ ] Criar um registro de teste em um paciente de teste e conferir que ele aparece depois de reiniciar o servidor.
+- [ ] Ajustar o backup: `mongodump` (ou o backup do provedor) passa a ser necessário para os arquivos anexados. Ver [IMPLANTACAO.md](./IMPLANTACAO.md#9-backups).
+
+### Voltar atrás
+
+O `data/db.json` não é alterado pela migração. Para voltar, pare o servidor e suba de novo sem `PEP_BANCO` (ou com `PEP_BANCO=json`). O que foi gravado no MongoDB depois da migração não volta sozinho para o JSON; se for preciso, restaure no JSON um backup gerado pelo servidor já no MongoDB (`npm run data:restaurar` com `PEP_BANCO=json`). Os arquivos anexados enviados depois da migração ficam só na coleção `arquivos`: não há script para trazê-los de volta a `data/arquivos/`.
+
+## Próximos passos (ainda não existem)
+
+1. **Leitura por consulta.** Hoje o servidor lê o conjunto inteiro a cada requisição, nos dois bancos. O passo seguinte é trocar `GET /api/data` por rotas por recurso (ex.: prontuário de um paciente, agenda de uma semana) que leiam só o necessário, usando os índices já criados, e paginar no servidor. A conferência de gravação de `shared/politica.js` precisará receber só os registros envolvidos.
+2. **Mais de uma instância do servidor.** Exige sessões fora da memória e controle de concorrência no banco em vez da fila local.
+3. **Migração da produção**, junto com a publicação para uso real.

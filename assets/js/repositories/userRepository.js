@@ -1,6 +1,6 @@
 // ============================================================
 // repositories/userRepository.js — ver patientRepository.js para o
-// racional da camada de repositório (mock hoje, API Java amanhã).
+// racional da camada de repositório (estado em memória, carregado do servidor Node).
 // ============================================================
 
 import { USERS, saveData, logAudit } from "../core/store.js";

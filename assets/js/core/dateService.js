@@ -15,7 +15,7 @@
 //   - Formato interno de data+hora:               "AAAA-MM-DD HH:mm"
 //   - Formato de exibição (pt-BR, sem hora):       "DD/MM/AAAA"
 //   - Fuso horário assumido: horário local do navegador do usuário
-//     (America/Sao_Paulo, na prática). O backend Java deverá
+//     (America/Sao_Paulo, na prática). O servidor deverá
 //     padronizar tudo em UTC e converter na borda da API — ver
 //     docs/SECURITY_BACKEND_REQUIREMENTS.md e docs/API_DTOS.md.
 //

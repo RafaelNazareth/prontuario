@@ -509,27 +509,31 @@ export const TIPOS_SOLICITACAO = {
   outro: "Outra solicitação",
 };
 
+// O titular pede presencialmente, por telefone ou e-mail; o técnico registra.
+export const CANAIS_SOLICITACAO = { presencial: "Presencial", telefone: "Telefone", email: "E-mail" };
+
 export function openModalSolicitacaoTitular(pid) {
-  const alvo = pid ?? currentUser.id;
+  const alvo = pid;
   const prazo = SESSAO.institucional?.prazoRespostaTitularDias || 15;
   openModal(
-    "Nova solicitação",
-    `<p class="prose" style="color:var(--text2);margin-bottom:12px">Sua solicitação é gratuita e será respondida em até ${prazo} dias (LGPD, art. 19).</p>
-    <div class="form-group"><label class="form-label" for="st-tipo">O que você precisa? *</label><select id="st-tipo" class="form-control">${Object.entries(TIPOS_SOLICITACAO).filter(([k]) => k !== "acesso").map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>
+    "Registrar solicitação do titular",
+    `<p class="prose" style="color:var(--text2);margin-bottom:12px">A solicitação é gratuita e deve ser respondida em até ${prazo} dias (LGPD, art. 19). Para pedido de acesso ao prontuário, responda gerando um acesso temporário ou imprimindo o prontuário.</p>
+    <div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="st-tipo">Pedido *</label><select id="st-tipo" class="form-control">${Object.entries(TIPOS_SOLICITACAO).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>
+    <div class="form-group"><label class="form-label" for="st-canal">Recebido por *</label><select id="st-canal" class="form-control">${Object.entries(CANAIS_SOLICITACAO).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div></div>
     <div class="form-group"><label class="form-label" for="st-desc">Detalhes *</label><textarea id="st-desc" class="form-control" rows="4" placeholder="Ex.: qual dado está incorreto e qual é o correto"></textarea></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarSolicitacaoTitular(${alvo})">Enviar solicitação</button>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarSolicitacaoTitular(${alvo})">Registrar solicitação</button>`,
   );
 }
 
 export async function salvarSolicitacaoTitular(pid) {
   const pac = PACIENTES.find((p) => p.id === pid);
-  if (!val("st-desc")) return toast("Descreva sua solicitação.", "error");
-  ACESSO_PACIENTE.push({ id: `sol_${generateId()}`, pacienteId: pid, nome: pac?.nome || "", tipo: val("st-tipo"), descricao: val("st-desc"), protocolo: `PROT-${Date.now().toString(36).toUpperCase()}` });
+  if (!val("st-desc")) return toast("Descreva a solicitação.", "error");
+  ACESSO_PACIENTE.push({ id: `sol_${generateId()}`, pacienteId: pid, nome: pac?.nome || "", tipo: val("st-tipo"), canal: val("st-canal"), descricao: val("st-desc"), protocolo: `PROT-${Date.now().toString(36).toUpperCase()}` });
   closeModal();
   saveData();
   await descarregar();
   toast("Solicitação registrada. Acompanhe o prazo nesta página.", "success");
-  navigate(currentUser.papel === "paciente" ? "meu-prontuario" : "acesso-pac");
+  navigate("acesso-pac");
 }
 
 export function openModalResponderSolicitacao(solId) {

@@ -966,7 +966,9 @@
       },
       "ativo": true,
       "seguranca": {},
-      "termos": {}
+      "termos": {},
+      "acessoTemporario": true,
+      "acessoExpiraEm": "2027-12-31T23:59:59.000Z"
     }
   ],
   "PACIENTES": [
@@ -17812,7 +17814,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "1359 KB",
         "data": "2026-06-03",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17825,7 +17826,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "1293 KB",
         "data": "2026-05-28",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17838,7 +17838,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "312 KB",
         "data": "2026-05-29",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17851,7 +17850,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "624 KB",
         "data": "2026-05-30",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17864,7 +17862,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "271 KB",
         "data": "2026-05-31",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17877,7 +17874,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "1078 KB",
         "data": "2026-06-03",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17888,7 +17884,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Relatório psicológico de acompanhamento",
-        "tamanho": "556 KB",
         "data": "2026-05-20",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -17908,7 +17903,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "1213 KB",
         "data": "2026-05-28",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17921,7 +17915,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "1008 KB",
         "data": "2026-05-29",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17932,7 +17925,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Relatório de avaliação psicológica",
-        "tamanho": "1055 KB",
         "data": "2026-05-27",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -17951,7 +17943,6 @@
         "categoria": "material_teste",
         "compartimento": "restrito",
         "titulo": "Folha de respostas da Y-BOCS (reaplicação)",
-        "tamanho": "212 KB",
         "data": "2026-08-21",
         "autor": "Victor Pereira",
         "autorId": 121,
@@ -17965,7 +17956,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "998 KB",
         "data": "2026-05-30",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17978,7 +17968,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "1107 KB",
         "data": "2026-05-31",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -17991,7 +17980,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "331 KB",
         "data": "2026-06-03",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -18002,7 +17990,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Laudo de avaliação neuropsicológica",
-        "tamanho": "1136 KB",
         "data": "2026-05-29",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -18020,7 +18007,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Relatório complementar: adaptações acadêmicas",
-        "tamanho": "749 KB",
         "data": "2026-08-10",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -18039,7 +18025,6 @@
         "categoria": "material_teste",
         "compartimento": "restrito",
         "titulo": "Protocolo da escala ASRS-18 (reaplicação)",
-        "tamanho": "164 KB",
         "data": "2026-09-14",
         "autor": "Eduarda Fernandes",
         "autorId": 130,
@@ -18116,7 +18101,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "842 KB",
         "data": "2026-05-28",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -18129,7 +18113,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "464 KB",
         "data": "2026-05-29",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -18140,7 +18123,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Relatório psicológico de encaminhamento",
-        "tamanho": "129 KB",
         "data": "2026-06-12",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -18160,7 +18142,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento (assinado pela responsável legal)",
-        "tamanho": "1046 KB",
         "data": "2026-05-30",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -18171,7 +18152,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Relatório da psicologia escolar",
-        "tamanho": "1015 KB",
         "data": "2026-05-26",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -18189,7 +18169,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Parecer de avaliação psicológica",
-        "tamanho": "363 KB",
         "data": "2026-05-26",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -18262,7 +18241,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "168 KB",
         "data": "2026-05-31",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -18275,7 +18253,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "409 KB",
         "data": "2026-06-03",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -18286,7 +18263,6 @@
         "tipo": "pdf",
         "categoria": "diagnostico_externo",
         "titulo": "Relatório psicológico e encaminhamento",
-        "tamanho": "573 KB",
         "data": "2026-05-28",
         "autor": "Dr. Carlos Mendes",
         "origem": {
@@ -18306,7 +18282,6 @@
         "tipo": "pdf",
         "categoria": "termo",
         "titulo": "Termo de consentimento livre e esclarecido",
-        "tamanho": "590 KB",
         "data": "2026-05-28",
         "autor": "Dr. Carlos Mendes",
         "compartimento": "prontuario"
@@ -19721,14 +19696,15 @@
       "pacienteId": 200,
       "nome": "Laura Assis",
       "tipo": "acesso",
-      "descricao": "Acesso ao prontuário pelo portal do paciente.",
+      "descricao": "Pedido presencial de acesso ao prontuário.",
       "status": "atendida",
       "solicitacao": "2026-06-01",
       "prazo": "2026-06-16",
-      "resposta": "Acesso liberado no portal do paciente.",
+      "resposta": "Acesso temporário gerado e entregue presencialmente.",
       "respondidoEm": "2026-06-01T14:00:00.000Z",
       "respondidoPorId": 1,
-      "protocolo": "PROT-2026-001"
+      "protocolo": "PROT-2026-001",
+      "canal": "presencial"
     }
   ],
   "NOTIFICACOES": [],
@@ -21292,5 +21268,19 @@
         }
       }
     ]
-  }
+  },
+  "SOLICITACOES_AGENDAMENTO": [
+    {
+      "id": "pag_seed_001",
+      "pacienteId": 200,
+      "tipo": "remarcar",
+      "agendamentoId": 1152,
+      "preferencia": "Pode ser na terça ou quarta à tarde, depois das 14h",
+      "observacao": "Tenho uma consulta médica marcada na segunda de manhã.",
+      "status": "pendente",
+      "criadoEm": "2026-11-17T13:20:00.000Z",
+      "solicitadoPorId": 1,
+      "canal": "telefone"
+    }
+  ]
 }

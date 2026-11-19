@@ -1,35 +1,65 @@
 # Matriz de Permissões — PEP (FCMSCSP)
 
-⚠️ **Isto documenta autorização de experiência do usuário (UX) no frontend, implementada em `assets/js/core/permissions.js`. NÃO é segurança real.** Todo o estado do sistema (quem está logado, quais pacientes existem) vive no navegador do próprio usuário; qualquer pessoa com o DevTools aberto pode alterar variáveis em memória e contornar qualquer checagem descrita aqui. A autorização que realmente protege os dados só existirá quando o backend Java validar, no servidor, cada requisição de forma independente do que o frontend envia. Ver [SECURITY_BACKEND_REQUIREMENTS.md](./SECURITY_BACKEND_REQUIREMENTS.md) — **toda linha desta matriz deve ser reimplementada e re-validada no backend antes de qualquer dado real trafegar.**
+As permissões existem em dois lugares, com as mesmas regras:
 
-Legenda: `C` create · `R` read · `U` update · `D` delete · `A` approve · `X` export · `—` sem acesso.
+- **No servidor** (`assets/js/shared/politica.js` e `assets/js/shared/usuarios.js`, usados por `server/index.mjs`): é a autorização que protege os dados. O navegador só recebe o escopo do papel, e cada gravação é conferida item a item; o que vier fora da regra é recusado com `403` e nada é gravado.
+- **Na tela** (`assets/js/core/permissions.js`, funções `can()` e `canAccessPage()`): só decide quais botões e páginas aparecem. Quem altera o JavaScript no navegador consegue ver um botão a mais, mas o servidor recusa a ação.
+
+No modo demonstração (GitHub Pages) as regras do servidor rodam no próprio navegador (`servidorDemo.js`) e, por isso, não protegem nada; servem só para mostrar o comportamento com dados fictícios.
+
+Legenda: `C` cria · `R` lê · `U` altera · `A` valida (co-assina) · `X` exporta · `—` sem acesso. "Do caso" quer dizer: o supervisor só nos casos que supervisiona, o estudante só nos casos do seu grupo.
 
 | Recurso | Técnico | Supervisor | Estudante | Paciente |
 |---|---|---|---|---|
-| Paciente (lista) | R (todos) | R (só onde é supervisor) | R (só onde é estudante) | R (só o próprio) |
-| Paciente (cadastro) | C, U | — | — | — |
-| Anamnese | C, U (enquanto rascunho) | C, U (enquanto rascunho) | C, U (enquanto rascunho, só seu caso) | R (só a própria, se acesso liberado) |
-| Evolução | C (nunca U/D) | C (nunca U/D) | C (nunca U/D, só seu caso) | R (só a própria, via PDF/resumo) |
-| Documento | C | C | C (só seu caso) | R (só o próprio, se acesso liberado) |
-| Agendamento | C, U, D (cancelar) | C, U, D (cancelar) | C, U, D (cancelar, só seu caso) | R (só o próprio)¹ |
-| Faltas | C (registrar), U (justificar) | C (registrar), U (justificar) | C (registrar) | — |
-| Usuários | C, R | — | — | — |
-| Acesso do Paciente (solicitações) | C, R, A | — | — | — |
-| Auditoria | R | — | — | — |
-| Notificações | R (próprias) | R (próprias) | R (próprias) | — (sem sininho na UI atual) |
-| Exportar PDF do prontuário | X | — (não exposto na UI atual) | — (não exposto na UI atual) | — |
+| Paciente (lista e prontuário) | R (todos) | R (do caso) | R (do caso) | R (só o próprio, sem registro documental, sem material de teste e sem registros aguardando validação) |
+| Paciente (cadastro, inclusive troca de supervisor e estagiários) | C, U | — | — | — |
+| Encerramento do caso | C | C (do caso) | — | R |
+| Consentimentos | C, revoga | C, revoga (do caso) | C, revoga (do caso) | R |
+| Avaliação de demanda (anamnese) | C, U enquanto rascunho; A | C, U enquanto rascunho; A (do caso) | C, U enquanto rascunho (do caso) | R (só finalizada) |
+| Evolução | C; A; retifica a própria | C; A; retifica a própria (do caso) | C; retifica a própria (do caso) | R (só validadas) |
+| Documento anexado (arquivo) | C; baixa | C; baixa (do caso) | C; baixa (do caso) | R e baixa (os próprios, exceto material de teste) |
+| Documento emitido (Res. CFP 06/2019) | C; A; registra devolutiva/entrega | C; A; registra devolutiva/entrega (do caso) | C; registra devolutiva/entrega (do caso) | R (validados) |
+| Registro documental | C, R | C, R (do caso) | C, R (do caso) | — |
+| Comunicações e compartilhamentos | C, R | C, R (do caso) | C, R (do caso) | R (os marcados como visíveis ao titular) |
+| Agendamento | C, R, U (remarca), cancela | R; marca "faltou" (do caso) | R; marca "faltou" (do caso) | R (só os próprios) |
+| Faltas | C; justifica | C; justifica (do caso) | C (do caso) | R (as próprias) |
+| Pedido de agendamento, remarcação ou cancelamento | C (registra o pedido feito presencialmente, por telefone ou e-mail, com o canal); R; responde (atende ou recusa com motivo) | — | — | — |
+| Solicitações do titular (LGPD) | C (registra o pedido feito presencialmente, por telefone ou e-mail, com o canal); R; responde | — | — | — |
+| Usuários da equipe | C, R, U, redefine senha, desbloqueia, inativa/reativa | — | — | — |
+| Acesso temporário do paciente ao prontuário | gera/renova (nova senha), U (login), encerra (inativa)/reativa | — | — | — |
+| Auditoria | R, X | — | — | — |
+| Notificações | R, U (todas) | R; marca como lida (do caso) | R; marca como lida (do caso e as dirigidas a ele) | — |
 
-¹ **Achado documentado, não corrigido:** a implementação atual (`can("appointment.manage")`) tecnicamente permite que o papel "paciente" veja os mesmos botões de editar/cancelar/registrar falta que a equipe clínica, na aba de agenda do prontuário. Isso é inatingível pela navegação normal da UI (a tela do paciente nunca chega a essa aba), mas é uma inconsistência de modelagem. Ver [FRONTEND_AUDIT.md](./FRONTEND_AUDIT.md), item 7. Recomendação: restringir para leitura (`R`) apenas, quando o time validar que não há caso de uso legítimo para o paciente cancelar/reportar falta em seu próprio atendimento.
+Regras que valem para todas as linhas:
 
-## O que precisa ser validado pelo backend
+- **Nada é excluído.** Registros ausentes numa gravação continuam no banco; usuários são inativados, nunca apagados.
+- **Autoria e horário são carimbados pelo servidor**, nunca aceitos do navegador.
+- **Registros de estudante nascem "Aguardando validação"** e só o supervisor do caso ou o técnico co-assina.
+- **O paciente só consulta.** O acesso dele é temporário (login e senha gerados pelo sistema, com prazo de `acessoPortal.validadeDias`) e qualquer gravação de um usuário paciente é recusada. Ele não agenda nem faz pedidos pelo sistema: pede presencialmente, por telefone ou e-mail, e o técnico registra.
+- **Gestão de usuários exige a senha do técnico** a cada operação (reautenticação), inclusive para gerar o acesso temporário do paciente. Mudar papel ou login encerra as sessões do usuário. A troca de papel é recusada enquanto o usuário estiver vinculado a casos, e o sistema nunca fica sem técnico ativo.
+- **Agenda:** o servidor recusa horário já ocupado pelo mesmo paciente ou pelo mesmo estagiário, estagiário fora do grupo do caso e agendamento em caso encerrado. Supervisor e estudante só podem mudar a situação de "confirmado" para "faltou". Agendamento cancelado não muda mais.
+- **Pedidos de agendamento:** só o técnico registra, informando o canal (`presencial`, `telefone` ou `email`). Um pedido de remarcação ou cancelamento precisa apontar para um atendimento confirmado do paciente; não se aceita pedido igual a outro ainda pendente. Recusar exige motivo. Supervisor e estudante não recebem os pedidos, porque não agendam.
+- **Arquivos:** o download usa o mesmo escopo da leitura do prontuário. O vínculo entre um registro e um arquivo só é feito pela rota de envio; `PUT /api/data` descarta o campo `arquivo`.
 
-Para cada linha acima, o backend deve, no mínimo:
+## Ações da tela (`core/permissions.js`)
 
-1. **Nunca confiar no `papel` enviado pelo cliente.** O papel deve ser resolvido no servidor a partir do token de autenticação (JWT/sessão), nunca de um campo no corpo da requisição.
-2. **Escopo de paciente por relação, não por lista enviada pelo cliente.** Ex.: `GET /api/v1/patients/{id}` para um estudante deve checar no banco se aquele estudante está em `estudantesIds` do paciente — nunca confiar em uma lista de IDs "permitidos" vinda do frontend.
-3. **Reforçar as regras de imutabilidade no servidor**, não só no frontend:
-   - Anamnese `finalizada` → servidor rejeita qualquer `PATCH`/`PUT` subsequente, independente do que o cliente envie.
-   - Evolução → não deve existir endpoint de update/delete no backend, ponto.
-4. **Paciente só vê o próprio prontuário se `AccessRequest.status === "liberado"`** — essa checagem hoje é feita no frontend (`renderMeuProntuario`) e deve ser replicada no backend antes de retornar qualquer dado clínico.
+| Ação | Quem |
+|---|---|
+| `patient.create`, `patient.update`, `user.create`, `user.read`, `access.manage`, `audit.read` | técnico |
+| `patient.read` | quem tem o paciente no escopo |
+| `evolution.create`, `anamnese.update`, `document.create`, `document.emit`, `sharing.create`, `registroDocumental.read`, `registroDocumental.create`, `consent.manage` | equipe (técnico, supervisor, estudante) |
+| `appointment.create`, `appointment.update`, `appointment.cancel`, `appointment.manage`, `appointment.respondRequest` | técnico |
+| `appointment.registerAbsence` | equipe |
+| `appointment.justifyAbsence` | técnico ou supervisor |
+| `appointment.request` | ninguém (o paciente não pede pelo sistema) |
+| `appointment.read` | qualquer usuário logado |
+| `record.validate` | técnico; supervisor do caso |
+| `case.close` | técnico ou supervisor |
+| `titular.request` | técnico (o titular pede presencialmente, por telefone ou e-mail; o técnico registra) |
+| `titular.respond` | técnico |
 
-Ver [AUDIT_LOG_SPEC.md](./AUDIT_LOG_SPEC.md) para o que deve ser logado a cada decisão de autorização (especialmente as negadas).
+Páginas (`canAccessPage`): dashboard, pacientes e agenda para a equipe; acesso, acesso dos pacientes e auditoria só para o técnico; "Meu prontuário" só para o paciente; privacidade para todos.
+
+O antigo achado do [FRONTEND_AUDIT.md](./FRONTEND_AUDIT.md) (item 7: `appointment.manage` incluía o paciente) foi resolvido em novembro de 2026.
+
+Ver [AUDIT_LOG_SPEC.md](./AUDIT_LOG_SPEC.md) para o que é registrado na trilha a cada ação.

@@ -9,10 +9,11 @@
 //   técnico    → todos os pacientes (é o responsável técnico)
 //   supervisor → pacientes que supervisiona
 //   estudante  → pacientes do seu grupo
-//   paciente   → o próprio prontuário (acesso integral, Res. CFP
-//                001/2009 art. 5º II), SEM o registro documental e
-//                sem material restrito de testes (Res. CFP 05/2025
-//                arts. 14 e 17 §2º)
+//   paciente   → só CONSULTA o próprio prontuário (acesso integral,
+//                Res. CFP 001/2009 art. 5º II), SEM o registro
+//                documental e sem material restrito de testes (Res.
+//                CFP 05/2025 arts. 14 e 17 §2º). O acesso é temporário,
+//                gerado pelo técnico, e não grava nada.
 //
 // Escrita (regras que o navegador não consegue contornar):
 //   - nada é excluído: registro ausente na gravação continua no banco
@@ -21,6 +22,13 @@
 //     Res. CFP 001/2009 art. 3º) e retificação pelo próprio autor com
 //     justificativa, guardando a versão anterior (SBIS NGS1.12.01);
 //   - avaliação de demanda (anamnese) finalizada não muda;
+//   - agenda: só o técnico responsável cria, altera ou cancela
+//     atendimentos; a equipe do caso apenas registra a falta; o
+//     paciente pede agendamento presencialmente, por telefone ou
+//     e-mail, e o técnico registra o pedido (SOLICITACOES_AGENDAMENTO);
+//   - o paciente não grava nada (o acesso dele é só de consulta);
+//   - o vínculo de um documento com o arquivo enviado só é feito pela
+//     rota de envio de arquivos, nunca por esta gravação;
 //   - autor, data/hora de registro e assinatura são carimbados aqui;
 //   - trilha de auditoria e usuários não são gravados por esta rota.
 // ============================================================
@@ -97,6 +105,7 @@ export function usuarioPublico(u, { completo = false } = {}) {
     ultimoAcesso: u.seguranca?.ultimoAcesso || null,
     bloqueadoAte: u.seguranca?.bloqueadoAte || null,
     trocaObrigatoria: Boolean(u.seguranca?.trocaObrigatoria),
+    acessoExpiraEm: u.papel === "paciente" ? u.acessoExpiraEm || null : undefined,
   };
 }
 
@@ -135,8 +144,10 @@ export function escopo(user, db) {
       COMPARTILHAMENTOS: filtrarMapa(db.COMPARTILHAMENTOS, ids, (c) => c.visivelAoTitular !== false),
       AGENDAMENTOS: db.AGENDAMENTOS.filter((a) => idSet.has(a.pacienteId)),
       FALTAS: db.FALTAS.filter((f) => idSet.has(f.pacienteId)),
+      // Pedidos e solicitações são registros de trabalho do técnico.
+      SOLICITACOES_AGENDAMENTO: [],
       NOTIFICACOES: [],
-      ACESSO_PACIENTE: db.ACESSO_PACIENTE.filter((r) => idSet.has(r.pacienteId)),
+      ACESSO_PACIENTE: [],
       AUDITORIA: [],
     };
   }
@@ -152,6 +163,8 @@ export function escopo(user, db) {
     COMPARTILHAMENTOS: filtrarMapa(db.COMPARTILHAMENTOS, ids),
     AGENDAMENTOS: db.AGENDAMENTOS.filter((a) => idSet.has(a.pacienteId)),
     FALTAS: db.FALTAS.filter((f) => idSet.has(f.pacienteId)),
+    // Pedidos de agendamento: só o técnico, que é quem agenda.
+    SOLICITACOES_AGENDAMENTO: tecnico ? db.SOLICITACOES_AGENDAMENTO || [] : [],
     NOTIFICACOES: db.NOTIFICACOES.filter(
       (n) => tecnico || idSet.has(n.pacienteId) || (n.estudantesIds || []).includes(user.id),
     ),
@@ -169,6 +182,18 @@ const recusar = (msg) => {
 function camposAlterados(antes, depois) {
   const chaves = new Set([...Object.keys(antes || {}), ...Object.keys(depois || {})]);
   return [...chaves].filter((k) => !igual(antes?.[k], depois?.[k]));
+}
+
+// Identificadores de registros novos: número inteiro ou texto só com letras,
+// números, "_" e "-". Os ids vão para atributos onclick das telas; um id
+// vindo do navegador com aspas ou parênteses viraria código na tela de
+// outro usuário (XSS armazenado).
+const RE_ID_SEGURO = /^[A-Za-z0-9_-]{1,80}$/;
+export function idSeguro(id) {
+  return Number.isSafeInteger(id) || (typeof id === "string" && RE_ID_SEGURO.test(id));
+}
+function exigirIdSeguro(id) {
+  if (!idSeguro(id)) recusar("Identificador de registro inválido.");
 }
 
 function exigirPaciente(ctx, pid) {
@@ -199,8 +224,11 @@ function mesclarPacientes(ctx, entrada = []) {
   for (const p of entrada) {
     const atual = db.PACIENTES.find((x) => x.id === p.id);
     if (!atual) {
+      exigirIdSeguro(p.id);
       if (user.papel !== "tecnico") recusar("Apenas o técnico responsável cadastra pacientes.");
       if (db.PACIENTES.some((x) => x.cpf && x.cpf === p.cpf)) recusar("Já existe paciente com este CPF.");
+      if (db.USERS.some((u) => u.id === p.id)) recusar("Identificador de paciente já usado por um usuário.");
+      conferirEquipeDoCaso(db, p);
       const novo = clone(p);
       novo.cadastradoEm = agoraISO();
       novo.cadastradoPorId = user.id;
@@ -243,6 +271,7 @@ function mesclarPacientes(ctx, entrada = []) {
     }
 
     const resto = alterados.filter((k) => k !== "consentimentos");
+    if (resto.includes("supervisorId") || resto.includes("estudantesIds")) conferirEquipeDoCaso(db, p);
     if (resto.length) {
       const encerramento = resto.every((k) => ["status", "encerramento"].includes(k));
       if (user.papel === "tecnico") {
@@ -258,6 +287,16 @@ function mesclarPacientes(ctx, entrada = []) {
     }
     Object.keys(atual).forEach((k) => delete atual[k]);
     Object.assign(atual, clone(p));
+  }
+}
+
+/** Supervisor e estagiários do caso precisam existir com o papel certo. */
+function conferirEquipeDoCaso(db, p) {
+  const sup = db.USERS.find((u) => u.id === p.supervisorId);
+  if (!sup || sup.papel !== "supervisor") recusar("Escolha um supervisor válido para o caso.");
+  for (const id of p.estudantesIds || []) {
+    const est = db.USERS.find((u) => u.id === id);
+    if (!est || est.papel !== "estudante") recusar("Um dos estagiários escolhidos não é um estudante cadastrado.");
   }
 }
 
@@ -317,6 +356,7 @@ function mesclarEvolucoes(ctx, entrada = {}) {
       exigirEquipe(ctx);
 
       if (!atual) {
+        exigirIdSeguro(e.id);
         if (!String(e.conteudo || "").trim()) recusar("A evolução precisa ter conteúdo.");
         const nova = {
           id: usados.has(String(e.id)) ? Date.now() + Math.floor(Math.random() * 1000) : e.id,
@@ -389,7 +429,13 @@ function mesclarDocumentos(ctx, entrada = {}) {
       exigirPaciente(ctx, pid);
       exigirEquipe(ctx);
       if (!atual) {
+        exigirIdSeguro(d.id);
         const novo = clone(d);
+        // O arquivo só é vinculado pela rota de envio (POST /api/pacientes/:id/documentos),
+        // que confere o conteúdo; um vínculo vindo daqui poderia apontar para
+        // o arquivo de outro paciente.
+        delete novo.arquivo;
+        delete novo.tamanho;
         if (usados.has(String(novo.id))) novo.id = `d${Date.now()}${Math.floor(Math.random() * 1000)}`;
         novo.autor = user.nome;
         novo.autorId = user.id;
@@ -434,6 +480,7 @@ function mesclarSoInclusao(ctx, nomeColecao, evento, entrada = {}, validar) {
     const atuais = (db[nomeColecao][pid] ||= []);
     for (const r of lista || []) {
       const atual = atuais.find((x) => String(x.id) === String(r.id));
+      if (!atual) exigirIdSeguro(r.id);
       if (atual) {
         if (!igual(atual, r)) recusar("Registros deste tipo não podem ser alterados nem apagados.");
         continue;
@@ -451,24 +498,168 @@ function mesclarSoInclusao(ctx, nomeColecao, evento, entrada = {}, validar) {
   }
 }
 
-// Listas operacionais (agenda, faltas, notificações)
-function mesclarLista(ctx, nome, entrada, { pid, criar, atualizar }) {
-  const { db } = ctx;
-  for (const item of entrada || []) {
-    const atual = db[nome].find((x) => String(x.id) === String(item.id));
-    if (atual && igual(atual, item)) continue;
-    const p = pid(item, atual);
-    if (p != null) exigirPaciente(ctx, p);
+// AGENDA ─────────────────────────────────────────────────────
+// Só o técnico responsável cria, altera e cancela atendimentos. A equipe
+// do caso (supervisor e estagiários) só registra que o paciente faltou.
+const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
+const RE_HORA = /^\d{2}:\d{2}$/;
+export const STATUS_AGENDAMENTO = ["confirmado", "cancelado", "faltou"];
+
+function conferirAgendamento(ctx, a, ignorarId) {
+  const pac = ctx.db.PACIENTES.find((p) => p.id === Number(a.pacienteId));
+  if (!pac) recusar("Paciente do agendamento não encontrado.");
+  if (!RE_DATA.test(String(a.data || ""))) recusar("Informe a data do agendamento.");
+  if (!RE_HORA.test(String(a.hora || ""))) recusar("Informe o horário do agendamento.");
+  if (!STATUS_AGENDAMENTO.includes(a.status)) recusar("Situação de agendamento inválida.");
+  if (a.estudanteId != null && !(pac.estudantesIds || []).includes(a.estudanteId))
+    recusar("O estagiário escolhido não faz parte do grupo deste caso.");
+  if (a.status === "confirmado") {
+    const conflito = ctx.db.AGENDAMENTOS.find(
+      (x) =>
+        String(x.id) !== String(ignorarId) &&
+        x.status === "confirmado" &&
+        x.data === a.data &&
+        x.hora === a.hora &&
+        (x.pacienteId === a.pacienteId || (a.estudanteId != null && x.estudanteId === a.estudanteId)),
+    );
+    if (conflito) recusar("Já existe atendimento confirmado neste horário para este paciente ou estagiário.");
+  }
+}
+
+function mesclarAgendamentos(ctx, entrada = []) {
+  const { db, user } = ctx;
+  const tecnico = user.papel === "tecnico";
+  for (const a of entrada || []) {
+    const atual = db.AGENDAMENTOS.find((x) => String(x.id) === String(a.id));
+    if (atual && igual(atual, a)) continue;
     exigirEquipe(ctx);
+    exigirPaciente(ctx, atual ? atual.pacienteId : a.pacienteId);
     if (!atual) {
-      db[nome].push(clone(item));
-      ctx.ev(criar, p ?? null, item.id, item.status || item.tipo);
-    } else {
-      if (pid(atual) !== pid(item)) recusar("Não é permitido mover o registro para outro paciente.");
-      Object.keys(atual).forEach((k) => delete atual[k]);
-      Object.assign(atual, clone(item));
-      ctx.ev(atualizar, p ?? null, item.id, item.status || item.tipo);
+      exigirIdSeguro(a.id);
+      if (!tecnico) recusar("Somente o técnico responsável cria agendamentos.");
+      const novo = clone(a);
+      novo.pacienteId = Number(novo.pacienteId);
+      novo.status ||= "confirmado";
+      if (novo.status !== "confirmado") recusar("Novo agendamento precisa estar confirmado.");
+      const pac = db.PACIENTES.find((p) => p.id === novo.pacienteId);
+      if (pac?.status === "inativo") recusar("O caso está encerrado; não é possível agendar.");
+      novo.supervisorId = pac?.supervisorId ?? null;
+      conferirAgendamento(ctx, novo);
+      novo.criadoPorId = user.id;
+      novo.criadoEm = agoraISO();
+      db.AGENDAMENTOS.push(novo);
+      ctx.ev("agendamento_criado", novo.pacienteId, novo.id, `${novo.data} ${novo.hora}`);
+      continue;
     }
+    const mud = camposAlterados(atual, a);
+    if (mud.includes("pacienteId") || mud.includes("id")) recusar("Não é permitido mover o agendamento para outro paciente.");
+    if (!tecnico) {
+      // Equipe do caso: só "confirmado" → "faltou".
+      const soFalta = mud.every((k) => k === "status") && atual.status === "confirmado" && a.status === "faltou";
+      if (!soFalta) recusar("Somente o técnico responsável altera ou cancela agendamentos. A equipe do caso pode registrar a falta.");
+      atual.status = "faltou";
+      ctx.ev("agendamento_atualizado", atual.pacienteId, atual.id, "faltou");
+      continue;
+    }
+    if (atual.status === "cancelado") recusar("Agendamento cancelado não pode ser alterado.");
+    const novo = { ...clone(a), supervisorId: atual.supervisorId, criadoPorId: atual.criadoPorId, criadoEm: atual.criadoEm };
+    conferirAgendamento(ctx, novo, atual.id);
+    if (novo.status === "cancelado") {
+      novo.canceladoPorId = user.id;
+      novo.canceladoEm = agoraISO();
+    }
+    novo.atualizadoPorId = user.id;
+    novo.atualizadoEm = agoraISO();
+    Object.keys(atual).forEach((k) => delete atual[k]);
+    Object.keys(novo).forEach((k) => novo[k] === undefined && delete novo[k]);
+    Object.assign(atual, novo);
+    ctx.ev("agendamento_atualizado", atual.pacienteId, atual.id, novo.status === "cancelado" ? "cancelado" : mud.join(","));
+  }
+}
+
+// FALTAS: a equipe do caso registra; só técnico ou supervisor justifica.
+function mesclarFaltas(ctx, entrada = []) {
+  const { db, user } = ctx;
+  for (const f of entrada || []) {
+    const atual = db.FALTAS.find((x) => String(x.id) === String(f.id));
+    if (atual && igual(atual, f)) continue;
+    exigirEquipe(ctx);
+    exigirPaciente(ctx, atual ? atual.pacienteId : f.pacienteId);
+    if (!atual) {
+      exigirIdSeguro(f.id);
+      db.FALTAS.push({ ...clone(f), registradoPorId: user.id, ts: agoraISO() });
+      ctx.ev("falta_registrada", f.pacienteId, f.id);
+      continue;
+    }
+    const mud = camposAlterados(atual, f);
+    if (!mud.every((k) => ["justificada", "justificativa"].includes(k))) recusar("A falta registrada só pode receber justificativa.");
+    if (!["tecnico", "supervisor"].includes(user.papel)) recusar("Só o técnico ou o supervisor do caso justifica faltas.");
+    atual.justificada = Boolean(f.justificada);
+    if (f.justificativa !== undefined) atual.justificativa = String(f.justificativa).slice(0, 300);
+    atual.justificadaPorId = user.id;
+    atual.justificadaEm = agoraISO();
+    ctx.ev("falta_atualizada", atual.pacienteId, atual.id, "justificada");
+  }
+}
+
+// PEDIDOS DE AGENDAMENTO: o paciente pede presencialmente, por telefone
+// ou por e-mail (nunca pelo sistema); o técnico registra e responde.
+export const TIPOS_PEDIDO_AGENDAMENTO = ["agendar", "remarcar", "cancelar"];
+export const CANAIS_PEDIDO = ["presencial", "telefone", "email"];
+
+function mesclarSolicitacoesAgendamento(ctx, entrada = []) {
+  const { db, user } = ctx;
+  db.SOLICITACOES_AGENDAMENTO ||= [];
+  for (const s of entrada || []) {
+    const atual = db.SOLICITACOES_AGENDAMENTO.find((x) => String(x.id) === String(s.id));
+    if (atual && igual(atual, s)) continue;
+    exigirPaciente(ctx, atual ? atual.pacienteId : s.pacienteId);
+    if (!atual) {
+      exigirIdSeguro(s.id);
+      if (user.papel !== "tecnico") recusar("Pedidos de agendamento são registrados pelo técnico responsável.");
+      if (!TIPOS_PEDIDO_AGENDAMENTO.includes(s.tipo)) recusar("Tipo de pedido inválido.");
+      if (!CANAIS_PEDIDO.includes(s.canal)) recusar("Informe como o pedido chegou: presencial, telefone ou e-mail.");
+      const pid = Number(s.pacienteId);
+      let ag = null;
+      if (s.tipo !== "agendar") {
+        ag = db.AGENDAMENTOS.find((a) => String(a.id) === String(s.agendamentoId));
+        if (!ag || ag.pacienteId !== pid || ag.status !== "confirmado") recusar("Escolha um atendimento confirmado para remarcar ou cancelar.");
+      }
+      const duplicado = db.SOLICITACOES_AGENDAMENTO.some(
+        (x) => x.pacienteId === pid && x.status === "pendente" && x.tipo === s.tipo && String(x.agendamentoId ?? "") === String(s.agendamentoId ?? ""),
+      );
+      if (duplicado) recusar("Já existe um pedido igual aguardando o técnico.");
+      const nova = {
+        id: String(s.id),
+        pacienteId: pid,
+        tipo: s.tipo,
+        agendamentoId: ag ? ag.id : null,
+        preferencia: String(s.preferencia || "").slice(0, 300),
+        observacao: String(s.observacao || "").slice(0, 500),
+        status: "pendente",
+        criadoEm: agoraISO(),
+        solicitadoPorId: user.id,
+        canal: s.canal,
+      };
+      db.SOLICITACOES_AGENDAMENTO.push(nova);
+      ctx.ev("solicitacao_agendamento_criada", pid, nova.id, nova.tipo);
+      continue;
+    }
+    if (user.papel !== "tecnico") recusar("Só o técnico responsável responde pedidos de agendamento.");
+    if (atual.status !== "pendente") recusar("Este pedido já foi respondido.");
+    const mud = camposAlterados(atual, s);
+    if (!mud.every((k) => ["status", "resposta", "agendamentoResultanteId", "respondidoEm", "respondidoPorId"].includes(k)))
+      recusar("Só é possível registrar a resposta do pedido.");
+    if (!["atendida", "recusada"].includes(s.status)) recusar("Responda o pedido como atendido ou recusado.");
+    if (s.status === "recusada" && String(s.resposta || "").trim().length < 5) recusar("Explique ao paciente por que o pedido foi recusado.");
+    Object.assign(atual, {
+      status: s.status,
+      resposta: String(s.resposta || "").slice(0, 500),
+      agendamentoResultanteId: db.AGENDAMENTOS.some((x) => x.id === s.agendamentoResultanteId) ? s.agendamentoResultanteId : null,
+      respondidoEm: agoraISO(),
+      respondidoPorId: user.id,
+    });
+    ctx.ev("solicitacao_agendamento_respondida", atual.pacienteId, atual.id, atual.status);
   }
 }
 
@@ -480,7 +671,9 @@ function mesclarSolicitacoes(ctx, entrada = [], prazoDias) {
     if (atual && igual(atual, s)) continue;
     exigirPaciente(ctx, s.pacienteId);
     if (!atual) {
-      if (!["tecnico", "paciente"].includes(user.papel)) recusar("Solicitações são registradas pelo titular ou pelo técnico.");
+      exigirIdSeguro(s.id);
+      if (user.papel !== "tecnico") recusar("Solicitações do titular são registradas pelo técnico responsável.");
+      if (s.canal != null && !CANAIS_PEDIDO.includes(s.canal)) recusar("Canal da solicitação inválido.");
       const nova = clone(s);
       const hoje = new Date();
       nova.solicitacao = hoje.toISOString().slice(0, 10);
@@ -529,18 +722,18 @@ export function aplicarAlteracoes(dbAtual, user, entrada, { prazoRespostaTitular
       if (["quebra_sigilo", "notificacao_compulsoria"].includes(r.tipo) && !String(r.fundamento || "").trim())
         recusar("Quebra de sigilo e notificação compulsória exigem fundamento (Código de Ética, art. 10).");
     });
-    mesclarLista(ctx, "AGENDAMENTOS", entrada.AGENDAMENTOS, {
-      pid: (a) => a?.pacienteId,
-      criar: "agendamento_criado",
-      atualizar: "agendamento_atualizado",
-    });
-    mesclarLista(ctx, "FALTAS", entrada.FALTAS, { pid: (f) => f?.pacienteId, criar: "falta_registrada", atualizar: "falta_atualizada" });
+    mesclarAgendamentos(ctx, entrada.AGENDAMENTOS);
+    mesclarFaltas(ctx, entrada.FALTAS);
+    mesclarSolicitacoesAgendamento(ctx, entrada.SOLICITACOES_AGENDAMENTO);
     mesclarNotificacoes(ctx, entrada.NOTIFICACOES);
     mesclarSolicitacoes(ctx, entrada.ACESSO_PACIENTE, prazoRespostaTitularDias);
   } catch (e) {
     if (e instanceof Recusa) return { ok: false, erro: e.message };
     throw e;
   }
+  // O acesso do paciente é só de consulta: qualquer alteração é recusada.
+  if (user.papel === "paciente" && estavel(db) !== estavel(dbAtual))
+    return { ok: false, erro: "O acesso do paciente é somente para consultar o próprio prontuário." };
   return { ok: true, db, eventos };
 }
 
@@ -556,6 +749,7 @@ function mesclarNotificacoes(ctx, entrada = []) {
       (n.estudantesIds || []).includes(user.id);
     if (!alcance) recusar("Sem permissão para esta notificação.");
     if (!atual) {
+      exigirIdSeguro(n.id);
       db.NOTIFICACOES.push(clone(n));
       ctx.ev("notificacao_criada", n.pacienteId ?? null, n.id, n.tipo);
     } else {

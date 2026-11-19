@@ -27,10 +27,11 @@ export const COLECOES = [
   "FALTAS",
   "REGISTRO_DOCUMENTAL",
   "COMPARTILHAMENTOS",
+  "SOLICITACOES_AGENDAMENTO",
 ];
 
-const LISTAS = ["USERS", "PACIENTES", "AGENDAMENTOS", "AUDITORIA", "ACESSO_PACIENTE", "NOTIFICACOES", "FALTAS"];
-const MAPAS = ["ANAMNESES", "EVOLUCOES", "DOCUMENTOS", "REGISTRO_DOCUMENTAL", "COMPARTILHAMENTOS"];
+export const LISTAS = ["USERS", "PACIENTES", "AGENDAMENTOS", "AUDITORIA", "ACESSO_PACIENTE", "NOTIFICACOES", "FALTAS", "SOLICITACOES_AGENDAMENTO"];
+export const MAPAS = ["ANAMNESES", "EVOLUCOES", "DOCUMENTOS", "REGISTRO_DOCUMENTAL", "COMPARTILHAMENTOS"];
 
 /** Valida a estrutura mínima; retorna a mensagem de erro ou null. */
 export function validarDataset(data) {
@@ -44,7 +45,7 @@ export function validarDataset(data) {
 }
 
 /** Mantém só as coleções conhecidas, na ordem canônica (coleções novas começam vazias). */
-function normalizar(data) {
+export function normalizar(data) {
   return Object.fromEntries(COLECOES.map((k) => [k, data[k] ?? (MAPAS.includes(k) ? {} : [])]));
 }
 

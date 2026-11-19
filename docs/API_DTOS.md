@@ -1,216 +1,188 @@
-# DTOs da API — PEP (FCMSCSP)
+# Formato dos dados da API — PEP (FCMSCSP)
 
-Contratos de dados para a futura API Java, referenciados por [BACKEND_CONTRACT.md](./BACKEND_CONTRACT.md). Os nomes de campo aqui usam `camelCase` (convenção JSON), diferente das entidades internas em português usadas no frontend mock — o mapeamento entre um e outro é responsabilidade da camada `infrastructure/api/` quando ela existir (ver [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)).
+Corpos e respostas das rotas descritas em [BACKEND_CONTRACT.md](./BACKEND_CONTRACT.md). Os nomes de campo são os mesmos do banco (em português), porque a API devolve o próprio conjunto de dados filtrado pelo escopo. A proteção de campos sensíveis é feita no servidor: hash de senha, dados de bloqueio e login de outros usuários nunca saem para quem não é técnico (`usuarioPublico` em `shared/politica.js`).
 
-**Princípio geral: nunca expor a entidade interna diretamente.** Cada DTO expõe só o que aquele endpoint precisa — evita vazar campos sensíveis (ex.: hash de senha) e evita acoplar o formato da API ao esquema interno do banco.
+Os campos de cada entidade estão em [DOMAIN_MODEL.md](./DOMAIN_MODEL.md). Abaixo, só o que é próprio da API.
 
-## Paginação
-
-Todas as listas seguem o mesmo envelope:
+## Erro
 
 ```json
-{
-  "items": [ /* T[] */ ],
-  "page": 1,
-  "pageSize": 20,
-  "total": 137
-}
+{ "erro": "Somente o técnico responsável cria agendamentos." }
 ```
 
-`page` é 1-indexado. Se um endpoint precisar de scroll infinito em vez de páginas numeradas (ex.: auditoria com volume muito alto), usar cursor-based (`?cursor=...`) documentado caso a caso — não introduzir os dois estilos sem necessidade.
+Em `401`, também `"motivo"`: `sem_sessao`, `sessao_invalida`, `inatividade`, `expirada`, `usuario_inativo` ou `acesso_expirado` (acesso temporário do paciente vencido; as sessões dele são encerradas).
 
-## Formato de erro
+Em `403`, `"motivo": "troca_senha"` quando a troca de senha está pendente: até a troca, só `GET /api/auth/me`, `POST /api/auth/termo`, `POST /api/auth/senha` e o logout respondem.
 
-```json
-{
-  "code": "PATIENT_NOT_FOUND",
-  "message": "Paciente não encontrado",
-  "details": {}
-}
-```
-
-`code` é uma constante estável (para o frontend decidir programaticamente o que fazer); `message` é texto amigável (pt-BR, pode ser mostrado ao usuário); `details` carrega informação estruturada extra quando fizer sentido (ex.: lista de campos inválidos em erro de validação).
-
-## Auth
+## Usuário público
 
 ```ts
-// Response de POST /auth/login
-UserResponseDTO {
-  id: string
+UsuarioPublico {
+  id: number
   nome: string
-  login: string
   papel: "tecnico" | "supervisor" | "estudante" | "paciente"
-  avatar: string
+  avatar: string          // iniciais
   color: string
-}
-```
-Nunca inclui senha ou hash.
-
-## Patient
-
-```ts
-CreatePatientDTO {
-  nome: string
-  cpf: string               // formato livre na entrada; backend normaliza
-  nascimento?: string        // ISO date
-  telefone?: string
-  email?: string
-  estudantesIds?: string[]   // 0 a 3
-  supervisorId: string
+  crp: string | null      // "CRP 06/123456" (técnico e supervisor)
+  matricula: string | null // estudante
+  ativo: boolean
 }
 
-UpdatePatientDTO = Partial<CreatePatientDTO> & { status?: "ativo" | "inativo" }
-
-PatientListItemDTO {
-  id: string
-  nome: string
-  cpf: string
-  status: "ativo" | "inativo"
-  supervisorNome: string      // já resolvido, evita N+1 no frontend
-  estudantesNomes: string[]   // idem
-  cor: string
-  iniciais: string
-}
-
-PatientDetailDTO extends PatientListItemDTO {
-  nascimento?: string
-  telefone?: string
-  email?: string
-  estudantesIds: string[]
-  supervisorId: string
-  createdAt: string
-  updatedAt: string
+// Só para o técnico (usuarioPublico com completo: true):
+UsuarioCompleto extends UsuarioPublico {
+  login: string
+  ultimoAcesso: string | null
+  bloqueadoAte: string | null
+  trocaObrigatoria: boolean
+  acessoExpiraEm?: string | null // só no usuário paciente: fim do acesso temporário
 }
 ```
 
-## Anamnesis
+Nunca inclui senha, hash ou senha anterior.
+
+## Sessão
 
 ```ts
-SaveAnamnesisDTO {
-  queixa: string             // obrigatório
-  historia?: string
-  historicoMedico?: string
-  medicamentos?: string
-  contexto?: string
-  hipoteses?: string
-  status: "rascunho" | "finalizada"
+// POST /api/auth/login → corpo
+{ login: string, senha: string }
+
+// Resposta de login e de GET /api/auth/me
+RespostaSessao {
+  usuario: UsuarioPublico & { login: string, acessoExpiraEm?: string } // acessoExpiraEm só para o paciente
+  termoPendente: boolean          // precisa aceitar a versão atual do aviso/termo
+  trocaObrigatoria: boolean       // equipe com senha inicial ou provisória: precisa trocar antes de seguir (nunca no paciente)
+  config: {
+    inatividadeMinutos: number    // 15
+    avisoInatividadeSegundos: number // 60
+    senha: { minimo: number, exigeLetra: boolean, exigeNumero: boolean, exigeEspecial: boolean }
+  }
+  institucional: Institucional    // ver GET /api/institucional
+  acesso?: { ultimoAcesso: string | null, falhasDesdeUltimoAcesso: number } // só no login
 }
 
-AnamnesisDTO extends SaveAnamnesisDTO {
-  patientId: string
-  criadoPor: string
-  criadoEm: string
-  atualizadoEm: string
+// POST /api/auth/termo
+{ versao: string }                // ex.: "2026-10"
+
+// POST /api/auth/senha
+{ senhaAtual: string, novaSenha: string }
+```
+
+## Usuários (técnico)
+
+```ts
+// POST /api/usuarios: equipe
+{ nome, login, papel: "tecnico" | "supervisor" | "estudante", crp?, matricula?, senhaInicial, senhaAdmin }
+
+// POST /api/usuarios com papel "paciente" é recusado (400): use a rota abaixo.
+
+// POST /api/pacientes/:pid/acesso-temporario: gera ou renova o acesso do paciente
+{ senhaAdmin: string }
+// Resposta 200 (a senha aparece só aqui, uma única vez)
+{ usuario: UsuarioCompleto, login: string /* "pac<id do caso>" */, senha: string /* 10 caracteres, sem ambíguos */,
+  expiraEm: string, validadeDias: number, validadeDefinida: boolean /* false = prazo provisório de 7 dias */ }
+
+// PUT /api/usuarios/:id (campos ausentes ficam como estão; no paciente, só login)
+{ nome?, login?, papel?, crp?, matricula?, senhaAdmin }
+
+// POST /api/usuarios/:id/senha (equipe; para paciente responde 400: renove o acesso temporário)
+{ senhaProvisoria: string, senhaAdmin: string }
+
+// POST /api/usuarios/:id/ativo
+{ ativo: boolean, senhaAdmin: string }
+
+// Respostas
+{ usuario: UsuarioCompleto }                          // cadastro, senha, desbloqueio, ativo
+{ usuario: UsuarioCompleto, alterados: string[] }     // edição, ex.: ["nome", "papel"]
+```
+
+`login`: 3 a 40 letras, números, ponto, hífen ou sublinhado, único (sem diferenciar maiúsculas). `senhaInicial` e `senhaProvisoria`: qualquer senha com pelo menos `SEGURANCA.senhaProvisoriaMinimo` (4) caracteres, trocada no primeiro acesso. A senha que a pessoa cria em `POST /api/auth/senha` segue a política de `SEGURANCA.senha` (mínimo de 8, com letra e número, sem conter nome ou login, diferente da atual).
+
+## Conjunto de dados
+
+`GET /api/data` devolve, e `PUT /api/data` recebe:
+
+```ts
+Dataset {
+  USERS: UsuarioPublico[]                       // UsuarioCompleto para o técnico
+  PACIENTES: Paciente[]
+  ANAMNESES: { [pacienteId]: Anamnese }
+  EVOLUCOES: { [pacienteId]: Evolucao[] }
+  DOCUMENTOS: { [pacienteId]: Documento[] }
+  REGISTRO_DOCUMENTAL: { [pacienteId]: RegistroDocumental[] }
+  COMPARTILHAMENTOS: { [pacienteId]: Compartilhamento[] }
+  AGENDAMENTOS: Agendamento[]
+  FALTAS: Falta[]
+  SOLICITACOES_AGENDAMENTO: SolicitacaoAgendamento[] // técnico: todos; demais (inclusive paciente): []
+  NOTIFICACOES: Notificacao[]
+  ACESSO_PACIENTE: SolicitacaoTitular[]         // técnico: todas; demais (inclusive paciente): []
+  AUDITORIA: []                                 // sempre vazia nesta rota
+}
+
+// PUT /api/data → resposta
+{ ok: true, data: Dataset }
+```
+
+O usuário paciente não grava: qualquer `PUT /api/data` dele é recusado. O `PUT` pode mandar só as coleções alteradas. Itens iguais ao que está no banco são ignorados; itens ausentes não são apagados.
+
+## Arquivos anexados
+
+```ts
+// POST /api/pacientes/:pid/documentos → corpo
+{
+  documento: {
+    categoria: "outro" | "termo" | "diagnostico_externo" | "material_teste"
+    titulo?: string
+    origem?: { profissional: string, crp: string, instituicao?: string, emitidoEm?: string } // obrigatório em diagnostico_externo
+    resumo?: string
+  }
+  arquivo: { nome: string, conteudoBase64: string }   // até 10 MB depois de decodificado
+}
+
+// Resposta 201
+{ documento: Documento, data: Dataset }
+
+// Metadado gravado pelo servidor em Documento.arquivo
+ArquivoAnexado {
+  id: string          // "a_<uuid>", chave no armazenamento cifrado
+  nome: string        // nome limpo, com a extensão do tipo real
+  mime: string        // application/pdf, image/png, image/jpeg ou o MIME do .docx
+  tamanho: number     // bytes do original
+  sha256: string      // do original, conferido a cada download
+  enviadoEm: string
 }
 ```
 
-## Evolution
+`GET /api/pacientes/:pid/documentos/:docId/arquivo` responde com o próprio arquivo (`Content-Type` = `arquivo.mime`, `Content-Disposition: attachment`), não JSON.
+
+## Auditoria
 
 ```ts
-CreateEvolutionDTO {
-  data: string                          // ISO datetime
-  tipo: "atendimento" | "supervisao"
-  conteudo: string                       // obrigatório
-  tags?: string[]
-}
+// POST /api/audit/evento
+{ tipo: "consulta_prontuario" | "consulta_documento" | "consulta_registro_documental" | "impressao" | "exportacao",
+  pacienteId?: number, registroId?: string | number, complemento?: string }
 
-EvolutionDTO extends CreateEvolutionDTO {
-  id: string
-  patientId: string
-  num: number
-  autor: string
-  papel: string
-  createdAt: string                       // imutável — sem updatedAt (nunca é editada)
+// GET /api/audit?de=&ate=&tipo=&userId=&pacienteId=&pagina=&porPagina=
+{
+  total: number, pagina: number, paginas: number, porPagina: number,
+  entradas: RegistroAuditoria[],                 // ver AUDIT_LOG_SPEC.md
+  verificacao: { integra: boolean, total: number, falhaEm?: string },
+  eventos: { [tipo]: string }                    // descrições para a tela
 }
 ```
 
-## Appointment
+## Institucional
 
 ```ts
-CreateAppointmentDTO {
-  patientId: string
-  estudanteId?: string
-  supervisorId?: string
-  data: string            // ISO date
-  hora: string            // "HH:mm"
-  local: string
-  modalidade: "presencial" | "online"
-}
-
-AppointmentDTO extends CreateAppointmentDTO {
-  id: string
-  status: "confirmado" | "pendente" | "cancelado" | "faltou"
-  createdAt: string
-  updatedAt: string
-}
-
-AbsenceDTO {
-  id: string
-  appointmentId: string
-  patientId: string
-  justificada: boolean
-  registradoPor: string
-  createdAt: string
-}
-```
-
-## Document
-
-```ts
-DocumentDTO {
-  id: string
-  patientId: string
-  nome: string
-  tipo: "pdf" | "img" | "docx"
-  tamanhoBytes: number        // tamanho real, não simulado, vindo do upload de verdade
-  url: string                  // URL assinada/temporária para download, não caminho direto de storage
-  autor: string
-  createdAt: string
-}
-```
-
-## AccessRequest
-
-```ts
-CreateAccessRequestDTO { patientId: string }
-
-AccessRequestDTO {
-  id: string
-  patientId: string
-  patientNome: string
-  status: "pendente" | "liberado"
-  protocolo: string
-  solicitacao: string
-  liberacao?: string
-}
-```
-
-## AuditEntry
-
-```ts
-AuditEntryDTO {
-  id: string
-  actor: string
-  actorId: string
-  action: string          // ver docs/AUDIT_LOG_SPEC.md para o vocabulário fechado de ações
-  resource?: string
-  resourceId?: string
-  timestamp: string
-  metadata?: Record<string, unknown>
-}
-```
-
-## Notification
-
-```ts
-NotificationDTO {
-  id: string
-  tipo: "evolucao_pendente" | "troca_solicitada" | "troca_realizada" | "falta_registrada"
-  patientId?: string
-  titulo: string
-  desc: string
-  tipoAcao?: "OPEN_PRONTUARIO" | "CONFIRMAR_TROCA"
-  lida: boolean
-  createdAt: string
+// GET /api/institucional
+Institucional {
+  controlador, servico, endereco, horario, contato: string
+  encarregado: { nome: string, email: string, telefone?: string }
+  responsavelTecnico: { nome: string, crp: string } | null
+  software: { nome: string, instituicao: string, versao: string }   // versao "1.2.0"
+  versaoTermo: string
+  prazoRespostaTitularDias: number   // 15
+  guardaAnos: number                 // 20
+  pendencias: string[]               // campos ainda "[definir]", ex.: ["encarregado.nome", "acessoPortal.validadeDias"]
+  acessoPortalDias: number           // validade do acesso temporário do paciente (7 enquanto não definida)
 }
 ```

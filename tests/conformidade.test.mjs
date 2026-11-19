@@ -183,12 +183,13 @@ test("estudante não cadastra paciente nem acessa paciente de outro grupo", () =
   assert.equal(r2.ok, false);
 });
 
-test("paciente pode abrir solicitação, mas não registrar evolução", () => {
+test("paciente só consulta; o técnico registra a solicitação do titular recebida fora do sistema", () => {
   const d = carregar();
-  const r = gravar(d, 200, (v) => {
-    v.ACESSO_PACIENTE.push({ id: "s1", pacienteId: 200, nome: "Laura Assis", tipo: "correcao", descricao: "Telefone errado" });
-  });
-  assert.equal(r.ok, true);
+  const pedido = { id: "s1", pacienteId: 200, nome: "Laura Assis", tipo: "correcao", canal: "telefone", descricao: "Telefone errado" };
+  const rp = aplicarAlteracoes(d, user(d, 200), { ACESSO_PACIENTE: [pedido] });
+  assert.equal(rp.ok, false, "o paciente não grava nada");
+  const r = aplicarAlteracoes(d, user(d, 1), { ACESSO_PACIENTE: [pedido] });
+  assert.equal(r.ok, true, r.erro);
   const s = r.db.ACESSO_PACIENTE.find((x) => x.id === "s1");
   assert.equal(s.status, "pendente");
   assert.ok(s.prazo > s.solicitacao);

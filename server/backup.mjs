@@ -1,7 +1,9 @@
 // ============================================================
 // server/backup.mjs
 // ------------------------------------------------------------
-// Cópias de segurança CIFRADAS do banco (data/db.json).
+// Cópias de segurança CIFRADAS do banco (JSON ou MongoDB).
+// Os arquivos anexados (já cifrados) são copiados à parte para
+// data/backups/arquivos/ pelo servidor.
 //
 //   - AES-256-GCM: confidencialidade + detecção de adulteração
 //     (SBIS NGS1.04.01/03; Guia de Segurança ANPD, item 49).
@@ -53,11 +55,15 @@ export function decifrar(buf, chave) {
   return { cabecalho: cab, texto };
 }
 
-/** Gera um backup de db.json em data/backups e apaga os mais antigos. */
-export function criarBackup(dir, { manterUltimos = 30 } = {}) {
+/**
+ * Gera um backup cifrado em data/backups e apaga os mais antigos.
+ * `texto` é o dataset em JSON (vem do banco em uso, JSON ou MongoDB);
+ * sem ele, copia data/db.json.
+ */
+export function criarBackup(dir, { manterUltimos = 30, texto } = {}) {
   const pasta = join(dir, "backups");
   mkdirSync(pasta, { recursive: true });
-  const texto = readFileSync(join(dir, "db.json"), "utf8");
+  texto ??= readFileSync(join(dir, "db.json"), "utf8");
   const nome = `pep-${new Date().toISOString().replace(/[:.]/g, "-")}.bkp`;
   writeFileSync(join(pasta, nome), cifrar(texto, obterChave(dir)), { mode: 0o600 });
   const todos = readdirSync(pasta).filter((f) => f.endsWith(".bkp")).sort();

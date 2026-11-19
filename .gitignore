@@ -8,3 +8,7 @@ data/*.tmp
 data/backups/
 data/.backup-key
 data/db.antes-da-restauracao-*.json
+data/arquivos/
+data/.arquivos-key
+data/instituicao.json
+.playwright-mcp/

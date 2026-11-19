@@ -50,15 +50,29 @@ test("apenas técnico pode criar/editar paciente e criar usuário", () => {
   }
 });
 
-test("equipe clínica (não paciente) pode registrar evolução e criar agendamento", () => {
+test("equipe clínica (não paciente) registra evolução e falta", () => {
   for (const user of [tecnico, supervisor, estudante]) {
     _setCurrentUserForTests(user);
     assert.equal(can("evolution.create"), true, `${user.papel} deveria poder registrar evolução`);
-    assert.equal(can("appointment.create"), true, `${user.papel} deveria poder criar agendamento`);
+    assert.equal(can("appointment.registerAbsence"), true, `${user.papel} deveria poder registrar falta`);
   }
   _setCurrentUserForTests(paciente);
   assert.equal(can("evolution.create"), false, "paciente nunca registra evolução");
-  assert.equal(can("appointment.create"), false, "paciente nunca cria agendamento");
+  assert.equal(can("appointment.registerAbsence"), false, "paciente não registra falta");
+});
+
+test("agenda: só o técnico cria, altera e cancela; o paciente só consulta", () => {
+  _setCurrentUserForTests(tecnico);
+  for (const acao of ["appointment.create", "appointment.update", "appointment.cancel", "appointment.manage", "appointment.respondRequest"])
+    assert.equal(can(acao), true, `técnico deveria poder ${acao}`);
+  assert.equal(can("appointment.request"), false);
+  for (const user of [supervisor, estudante, paciente]) {
+    _setCurrentUserForTests(user);
+    for (const acao of ["appointment.create", "appointment.update", "appointment.cancel", "appointment.manage", "appointment.respondRequest"])
+      assert.equal(can(acao), false, `${user.papel} não deveria poder ${acao}`);
+  }
+  _setCurrentUserForTests(paciente);
+  assert.equal(can("appointment.request"), false, "paciente só consulta; pede agendamento fora do sistema");
 });
 
 test("supervisor só lê pacientes onde é supervisorId — nunca pacientes de outro supervisor", () => {

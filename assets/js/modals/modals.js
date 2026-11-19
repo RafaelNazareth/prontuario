@@ -5,12 +5,11 @@
 
 import { currentUser, navigate } from "../core/auth.js";
 import { openProntuario } from "../pages/dashboard.js";
-import { AGENDAMENTOS, DOCUMENTOS, PACIENTES, USERS, escapeHTML, getPacientesPermitidos, initData as recarregarDadosDoServidor, logAudit, saveData } from "../core/store.js";
+import { DOCUMENTOS, PACIENTES, USERS, escapeHTML, initData as recarregarDadosDoServidor, loadDataset, logAudit, saveData } from "../core/store.js";
+import { ACEITE_ARQUIVO, LIMITE_ARQUIVO_BYTES, TIPOS_ARQUIVO, formatarTamanho } from "../shared/arquivos.js";
 import { toast } from "../core/utils.js";
 import { patientRepository } from "../repositories/patientRepository.js";
-import { appointmentRepository } from "../repositories/appointmentRepository.js";
 import { clinicalRepository } from "../repositories/clinicalRepository.js";
-import { documentRepository } from "../repositories/documentRepository.js";
 import { AnamnesisStatus } from "../core/enums.js";
 import { can } from "../core/permissions.js";
 import { formatBR, calculateAge } from "../core/dateService.js";
@@ -148,7 +147,8 @@ export async function executarSalvarEvolucao(pid) {
 }
 
 /* ============================================================  DOCUMENTOS E ANAMNESE  */
-// Visualizador de documento (metadados + resumo; o arquivo em si é simulado).
+// Visualizador de documento anexado: dados do registro e download do
+// arquivo real (conferido pelo SHA-256 e auditado pelo servidor).
 export function openModalDocumento(pid, docId) {
   const doc = (DOCUMENTOS[pid] || []).find((d) => String(d.id) === String(docId));
   if (!doc) return toast("Documento não encontrado.", "error");
@@ -159,29 +159,40 @@ export function openModalDocumento(pid, docId) {
   }
   const pac = PACIENTES.find((p) => p.id === pid);
   const o = doc.origem;
+  const arq = doc.arquivo;
   const linhas = [
     ["Paciente", pac?.nome],
-    ["Arquivo", `${doc.nome}${doc.tamanho ? ` (${doc.tamanho})` : ""}`],
+    ["Arquivo", arq ? `${arq.nome} (${TIPOS_ARQUIVO[doc.tipo]?.rotulo || doc.tipo}, ${formatarTamanho(arq.tamanho)})` : `${doc.nome} (sem arquivo digital)`],
     o ? ["Emitido por", `${o.profissional}, ${o.crp}`] : null,
     o?.instituicao ? ["Instituição", o.instituicao] : null,
     o?.emitidoEm ? ["Data de emissão", formatBR(o.emitidoEm)] : null,
     ["Anexado em", `${doc.data ? formatBR(doc.data) : "—"} por ${doc.autor || "—"}`],
+    arq ? ["Integridade (SHA-256)", arq.sha256] : null,
   ].filter(Boolean);
   openModal(
     escapeHTML(doc.titulo || doc.nome),
     `${o ? `<div class="callout" style="margin-bottom:16px"><i class="bi bi-info-circle"></i><span>Documento emitido por profissional externo ao Serviço-Escola. As conclusões são de responsabilidade de quem o assinou.</span></div>` : ""}
-    <dl class="data-list">${linhas.map(([l, v]) => `<div><dt>${l}</dt><dd>${escapeHTML(v || "—")}</dd></div>`).join("")}</dl>
+    <dl class="data-list">${linhas.map(([l, v]) => `<div><dt>${l}</dt><dd${l.startsWith("Integridade") ? ' style="word-break:break-all;font-size:12px"' : ""}>${escapeHTML(v || "—")}</dd></div>`).join("")}</dl>
     ${doc.resumo ? `<h4 class="doc-group-title" style="margin-top:20px">Resumo e conclusão</h4><p class="prose">${escapeHTML(doc.resumo)}</p>` : ""}
+    ${arq ? "" : `<div class="callout" style="margin-top:16px"><i class="bi bi-archive"></i><span>Registro feito antes do envio de arquivos digitais: só os dados do documento estão no sistema. O original fica no arquivo físico do Serviço-Escola.</span></div>`}
     ${doc.compartimento === "restrito" ? `<div class="callout" style="margin-top:16px"><i class="bi bi-eye-slash"></i><span>Material de teste: pasta de acesso exclusivo do psicólogo, fora do prontuário acessado pelo paciente (Res. CFP 001/2009, art. 2º, VI).</span></div>` : ""}`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Fechar</button><button class="btn btn-primary" onclick="baixarDocumento(${pid},'${escapeHTML(String(doc.id))}')"><i class="bi bi-download"></i> Baixar arquivo</button>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Fechar</button>${arq ? `<button class="btn btn-primary" id="btn-baixar-doc" onclick="baixarDocumento(${pid},'${escapeHTML(String(doc.id))}')"><i class="bi bi-download"></i> Baixar arquivo</button>` : ""}`,
   );
 }
 
-// Download simulado (não há arquivo real), mas a exportação fica auditada.
-export function baixarDocumento(pid, docId) {
-  const doc = (DOCUMENTOS[pid] || []).find((d) => String(d.id) === String(docId));
-  logAudit("exportacao", "Baixou documento", null, { evento: "exportacao", pacienteId: pid, registroId: docId, complemento: "download de documento" });
-  toast(`Download simulado: ${doc?.nome || "documento"}`, "info");
+// Download do arquivo real; o servidor confere a permissão e a
+// integridade e registra o download na trilha de auditoria.
+export async function baixarDocumento(pid, docId) {
+  const btn = document.getElementById("btn-baixar-doc");
+  if (btn) btn.disabled = true;
+  try {
+    const nome = await servidor.baixarArquivo(pid, docId);
+    toast(`Download iniciado: ${nome}`, "success");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 export function alternarOrigemDocumento(categoria) {
@@ -190,31 +201,57 @@ export function alternarOrigemDocumento(categoria) {
 }
 
 export function openModalUploadDocumento(pid) {
+  if (!can("document.create")) return toast("Sem permissão para anexar documentos.", "error");
   openModal(
-    `Enviar documento`,
-    `<div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="up-cat">Categoria</label><select id="up-cat" class="form-control" onchange="alternarOrigemDocumento(this.value)"><option value="outro">Documento do caso</option><option value="termo">Termo</option><option value="diagnostico_externo">Diagnóstico de outro profissional</option><option value="material_teste">Material de teste (acesso exclusivo do psicólogo)</option></select></div><div class="form-group"><label class="form-label" for="up-tipo">Formato</label><select id="up-tipo" class="form-control"><option value="pdf">PDF</option><option value="img">Imagem</option><option value="docx">Word</option></select></div></div><div class="form-group"><label class="form-label" for="up-nome">Nome do arquivo</label><input type="text" id="up-nome" class="form-control" placeholder="Laudo_psicologico.pdf"></div><div id="up-origem" style="display:none"><div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="up-prof">Profissional</label><input type="text" id="up-prof" class="form-control" placeholder="Dra. Nome Sobrenome"></div><div class="form-group"><label class="form-label" for="up-crp">CRP</label><input type="text" id="up-crp" class="form-control" placeholder="CRP 06/000000"></div></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="up-inst">Instituição</label><input type="text" id="up-inst" class="form-control"></div><div class="form-group"><label class="form-label" for="up-emissao">Data de emissão</label><input type="date" id="up-emissao" class="form-control"></div></div><div class="form-group"><label class="form-label" for="up-resumo">Resumo e conclusão</label><textarea id="up-resumo" class="form-control" rows="3" placeholder="Hipótese ou conclusão diagnóstica e recomendações do documento"></textarea></div></div><div class="form-group"><label class="form-label">Arquivo</label><input type="file" class="form-control"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarUploadDocumento(${pid})">Enviar documento</button>`,
+    `Anexar arquivo`,
+    `<div class="form-group"><label class="form-label" for="up-cat">Categoria</label><select id="up-cat" class="form-control" onchange="alternarOrigemDocumento(this.value)"><option value="outro">Documento do caso</option><option value="termo">Termo assinado</option><option value="diagnostico_externo">Diagnóstico de outro profissional</option><option value="material_teste">Material de teste (acesso exclusivo do psicólogo)</option></select></div>
+    <div class="form-group"><label class="form-label" for="up-arquivo">Arquivo *</label><input type="file" id="up-arquivo" class="form-control" accept="${ACEITE_ARQUIVO}" onchange="mostrarArquivoEscolhido(this)"><div class="form-hint" id="up-arquivo-info">PDF, imagem (PNG ou JPEG) ou Word (.docx), até ${formatarTamanho(LIMITE_ARQUIVO_BYTES)}. O arquivo é guardado cifrado.</div></div>
+    <div class="form-group"><label class="form-label" for="up-titulo">Título <span class="muted" style="font-weight:400">(opcional)</span></label><input type="text" id="up-titulo" class="form-control" maxlength="200" placeholder="Termo de consentimento assinado"></div>
+    <div id="up-origem" style="display:none"><div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="up-prof">Profissional *</label><input type="text" id="up-prof" class="form-control" placeholder="Dra. Nome Sobrenome"></div><div class="form-group"><label class="form-label" for="up-crp">Registro profissional *</label><input type="text" id="up-crp" class="form-control" placeholder="CRP 06/000000 ou CRM"></div></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="up-inst">Instituição</label><input type="text" id="up-inst" class="form-control"></div><div class="form-group"><label class="form-label" for="up-emissao">Data de emissão</label><input type="date" id="up-emissao" class="form-control"></div></div><div class="form-group"><label class="form-label" for="up-resumo">Resumo e conclusão</label><textarea id="up-resumo" class="form-control" rows="3" placeholder="Hipótese ou conclusão diagnóstica e recomendações do documento"></textarea></div></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="btn-enviar-doc" onclick="salvarUploadDocumento(${pid})"><i class="bi bi-upload"></i> Enviar arquivo</button>`,
   );
 }
-export function salvarUploadDocumento(pid) {
+
+export function mostrarArquivoEscolhido(input) {
+  const f = input.files?.[0];
+  const info = document.getElementById("up-arquivo-info");
+  if (!f || !info) return;
+  const grande = f.size > LIMITE_ARQUIVO_BYTES;
+  info.textContent = grande ? `${f.name} tem ${formatarTamanho(f.size)}: passa do limite de ${formatarTamanho(LIMITE_ARQUIVO_BYTES)}.` : `${f.name} (${formatarTamanho(f.size)})`;
+  info.style.color = grande ? "var(--red)" : "";
+}
+
+export async function salvarUploadDocumento(pid) {
   const val = (id) => document.getElementById(id)?.value.trim() || "";
-  const nome = val("up-nome") || "Documento.pdf";
-  const tipo = val("up-tipo");
+  const arquivo = document.getElementById("up-arquivo")?.files?.[0];
+  if (!arquivo) return showError("up-arquivo", "Selecione o arquivo a enviar.");
+  if (arquivo.size > LIMITE_ARQUIVO_BYTES) return showError("up-arquivo", `O arquivo passa do limite de ${formatarTamanho(LIMITE_ARQUIVO_BYTES)}.`);
   const categoria = val("up-cat") || "outro";
-  const extra = { categoria, compartimento: categoria === "material_teste" ? "restrito" : "prontuario" };
+  const documento = { categoria, titulo: val("up-titulo") };
   if (categoria === "diagnostico_externo") {
-    if (!val("up-prof") || !val("up-crp"))
-      return toast("Informe o profissional e o CRP de quem emitiu o diagnóstico.", "error");
-    extra.titulo = "Diagnóstico de outro profissional";
-    extra.origem = { profissional: val("up-prof"), crp: val("up-crp"), instituicao: val("up-inst"), emitidoEm: val("up-emissao") };
-    extra.resumo = val("up-resumo");
+    if (!val("up-prof") || !val("up-crp")) return toast("Informe o profissional e o registro de quem emitiu o diagnóstico.", "error");
+    documento.origem = { profissional: val("up-prof"), crp: val("up-crp"), instituicao: val("up-inst"), emitidoEm: val("up-emissao") };
+    documento.resumo = val("up-resumo");
   }
-  documentRepository.create(pid, { nome, tipo, ...extra }, currentUser.nome);
+  const btn = document.getElementById("btn-enviar-doc");
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<i class="bi bi-hourglass-split"></i> Enviando…`;
+  }
+  try {
+    await descarregar(); // grava antes o que estiver pendente
+    const r = await servidor.enviarDocumento(pid, documento, arquivo);
+    loadDataset(r.data);
+  } catch (err) {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i class="bi bi-upload"></i> Enviar arquivo`;
+    }
+    return toast(err.message, "error");
+  }
   closeModal();
-  descarregar().then(() => {
-    toast("Documento anexado.", "success");
-    openProntuario(pid, extra.compartimento === "restrito" ? "registro" : "documentos", { registrar: false });
-  });
+  toast("Arquivo anexado ao prontuário.", "success");
+  openProntuario(pid, categoria === "material_teste" ? "registro" : "documentos", { registrar: false });
 }
 
 export function openModalAnamnese(pid) {
@@ -376,15 +413,18 @@ export async function salvarNovoPaciente() {
 
 export function openModalEditarPaciente(pid) {
   const p = PACIENTES.find((x) => x.id === pid);
-  const estudantesOptions = USERS.filter((u) => u.papel === "estudante")
+  const estudantesOptions = USERS.filter((u) => u.papel === "estudante" && (u.ativo !== false || (p.estudantesIds || []).includes(u.id)))
     .map((u) => `<option value="${u.id}">${escapeHTML(u.nome)}</option>`)
+    .join("");
+  const supervisoresOptions = USERS.filter((u) => u.papel === "supervisor" && (u.ativo !== false || u.id === p.supervisorId))
+    .map((u) => `<option value="${u.id}" ${u.id === p.supervisorId ? "selected" : ""}>${escapeHTML(u.nome)}${u.crp ? ` (${escapeHTML(u.crp)})` : ""}</option>`)
     .join("");
   const est1 = p.estudantesIds && p.estudantesIds[0] ? p.estudantesIds[0] : "";
   const est2 = p.estudantesIds && p.estudantesIds[1] ? p.estudantesIds[1] : "";
   const est3 = p.estudantesIds && p.estudantesIds[2] ? p.estudantesIds[2] : "";
   openModal(
     `Editar cadastro de ${escapeHTML(p.nome)}`,
-    `<div class="form-row form-row-2"><div class="form-group"><label class="form-label">Nome completo</label><input class="form-control" id="ep-nome" type="text" value="${escapeHTML(p.nome)}"></div><div class="form-group"><label class="form-label">CPF</label><input class="form-control" id="ep-cpf" type="text" value="${escapeHTML(p.cpf)}" oninput="maskCPF(this)"></div></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label">Telefone</label><input class="form-control" id="ep-tel" type="tel" value="${escapeHTML(p.telefone)}" oninput="maskPhone(this)"></div><div class="form-group"><label class="form-label">E-mail</label><input class="form-control" id="ep-email" type="email" value="${escapeHTML(p.email)}"></div></div><div class="form-row form-row-3"><div class="form-group"><label class="form-label">Estudante 1</label><select class="form-control" id="ep-est1"><option value="">Nenhum</option>${estudantesOptions}</select></div><div class="form-group"><label class="form-label">Estudante 2</label><select class="form-control" id="ep-est2"><option value="">Nenhum</option>${estudantesOptions}</select></div><div class="form-group"><label class="form-label">Estudante 3</label><select class="form-control" id="ep-est3"><option value="">Nenhum</option>${estudantesOptions}</select></div></div>${_camposIdentificacao("ep", p)}<div class="form-hint">Para encerrar o atendimento, use "Encerrar" no prontuário: o motivo fica registrado.</div>`,
+    `<div class="form-row form-row-2"><div class="form-group"><label class="form-label">Nome completo</label><input class="form-control" id="ep-nome" type="text" value="${escapeHTML(p.nome)}"></div><div class="form-group"><label class="form-label">CPF</label><input class="form-control" id="ep-cpf" type="text" value="${escapeHTML(p.cpf)}" oninput="maskCPF(this)"></div></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label">Telefone</label><input class="form-control" id="ep-tel" type="tel" value="${escapeHTML(p.telefone)}" oninput="maskPhone(this)"></div><div class="form-group"><label class="form-label">E-mail</label><input class="form-control" id="ep-email" type="email" value="${escapeHTML(p.email)}"></div></div><div class="form-group"><label class="form-label" for="ep-sup">Supervisor do caso *</label><select class="form-control" id="ep-sup">${supervisoresOptions}</select><div class="form-hint">Trocar o supervisor transfere a co-assinatura dos próximos registros. Os registros já validados mantêm a assinatura de quem validou.</div></div><div class="form-row form-row-3"><div class="form-group"><label class="form-label">Estudante 1</label><select class="form-control" id="ep-est1"><option value="">Nenhum</option>${estudantesOptions}</select></div><div class="form-group"><label class="form-label">Estudante 2</label><select class="form-control" id="ep-est2"><option value="">Nenhum</option>${estudantesOptions}</select></div><div class="form-group"><label class="form-label">Estudante 3</label><select class="form-control" id="ep-est3"><option value="">Nenhum</option>${estudantesOptions}</select></div></div>${_camposIdentificacao("ep", p)}<div class="form-hint">Para encerrar o atendimento, use "Encerrar" no prontuário: o motivo fica registrado.</div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarEdicaoPaciente(${pid})">Salvar alterações</button>`,
   );
   document.getElementById("ep-est1").value = est1;
@@ -412,7 +452,9 @@ export function salvarEdicaoPaciente(pid) {
   const e1 = parseInt(document.getElementById("ep-est1").value);
   const e2 = parseInt(document.getElementById("ep-est2").value);
   const e3 = parseInt(document.getElementById("ep-est3").value);
-  p.estudantesIds = [e1, e2, e3].filter((id) => !isNaN(id));
+  p.estudantesIds = [...new Set([e1, e2, e3].filter((id) => !isNaN(id)))];
+  const sup = parseInt(document.getElementById("ep-sup").value);
+  if (!isNaN(sup)) p.supervisorId = sup;
   p.ini = p.nome
     .split(" ")
     .map((n) => n[0])
@@ -427,7 +469,7 @@ export function salvarEdicaoPaciente(pid) {
   });
 }
 
-/* ============================================================  USUÁRIO E AGENDAMENTO  */
+/* ============================================================  USUÁRIO  */
 export function alternarCamposUsuario(papel) {
   document.getElementById("nu-crp-grupo").style.display = papel === "estudante" ? "none" : "block";
   document.getElementById("nu-mat-grupo").style.display = papel === "estudante" ? "block" : "none";
@@ -440,7 +482,7 @@ export function openModalNovoUsuario() {
     <div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="nu-role">Papel *</label><select class="form-control" id="nu-role" onchange="alternarCamposUsuario(this.value)"><option value="estudante">Estudante</option><option value="supervisor">Supervisor</option><option value="tecnico">Psicólogo técnico</option></select></div>
     <div class="form-group" id="nu-mat-grupo"><label class="form-label" for="nu-mat">Matrícula *</label><input class="form-control" id="nu-mat" type="text"></div>
     <div class="form-group" id="nu-crp-grupo" style="display:none"><label class="form-label" for="nu-crp">CRP *</label><input class="form-control" id="nu-crp" type="text" placeholder="CRP 06/123456"></div></div>
-    <div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="nu-pass">Senha inicial *</label><input class="form-control" id="nu-pass" type="password" autocomplete="new-password"><div class="form-hint">Mínimo de 8 caracteres, com letras e números. A pessoa troca no primeiro acesso.</div></div>
+    <div class="form-row form-row-2"><div class="form-group"><label class="form-label" for="nu-pass">Senha inicial *</label><input class="form-control" id="nu-pass" type="password" autocomplete="new-password"><div class="form-hint">Pode ser qualquer senha (mínimo de 4 caracteres). No primeiro acesso a pessoa é obrigada a criar a própria senha.</div></div>
     <div class="form-group"><label class="form-label" for="nu-admin">Sua senha (confirmação) *</label><input class="form-control" id="nu-admin" type="password" autocomplete="off"><div class="form-hint">Exigida para gerir usuários.</div></div></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarNovoUsuario()">Cadastrar</button>`,
   );
@@ -466,155 +508,5 @@ export async function salvarNovoUsuario() {
   navigate("acesso");
 }
 
-export function openModalNovoAgendamento() {
-  const meusPacientes = getPacientesPermitidos();
-  openModal(
-    `Novo agendamento`,
-    `<div class="form-group"><label class="form-label">Paciente</label><select id="ag-pac" class="form-control">${meusPacientes.map((p) => `<option value="${p.id}">${escapeHTML(p.nome)}</option>`).join("")}</select></div><div class="form-row form-row-2"><div class="form-group"><label class="form-label">Data</label><input type="date" id="ag-data" class="form-control"></div><div class="form-group"><label class="form-label">Hora</label><input type="time" id="ag-hora" class="form-control"></div></div><div class="form-group"><label class="form-label">Local</label><input type="text" id="ag-local" class="form-control" placeholder="Sala 02"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarAgendamento()">Agendar</button>`,
-  );
-}
-
-export function salvarAgendamento() {
-  const pacienteId = parseInt(document.getElementById("ag-pac").value);
-  const agData = document.getElementById("ag-data").value;
-  const agHora = document.getElementById("ag-hora").value;
-  if (!agData) return toast("Selecione a data do agendamento.", "error");
-  if (!agHora) return toast("Selecione o horário do agendamento.", "error");
-  const pac = PACIENTES.find((p) => p.id === pacienteId);
-  const estId = currentUser.papel === "estudante" ? currentUser.id : pac?.estudantesIds?.[0] || null;
-  const supId = currentUser.papel === "supervisor" ? currentUser.id : pac?.supervisorId || null;
-  if (appointmentRepository.hasConflict({ pacienteId, estudanteId: estId, data: agData, hora: agHora })) {
-    return toast("Já existe um agendamento para este paciente com este estudante neste horário.", "error");
-  }
-  appointmentRepository.create({
-    pacienteId,
-    estudanteId: estId,
-    supervisorId: supId,
-    data: agData,
-    hora: agHora,
-    local: document.getElementById("ag-local").value.trim() || "Consultório",
-    modalidade: "presencial",
-  });
-  logAudit("agenda", "Criou agendamento", pac?.nome || "");
-  saveData();
-  closeModal();
-  toast("Agendamento criado.", "success");
-  navigate("agenda");
-}
-
-/* ============================================================  EDITAR E CANCELAR AGENDAMENTO  */
-
-// ─────────────────────────────────────────────────────────────
-// openModalEditarAgendamento(agId)
-// Abre modal de edição de data/hora/local de um agendamento.
-// Valida: data obrigatória, hora obrigatória, conflito de horário.
-// Auditoria: toda edição é registrada via logAudit().
-// ─────────────────────────────────────────────────────────────
-export function openModalEditarAgendamento(agId) {
-  const ag = AGENDAMENTOS.find((a) => a.id === agId);
-  if (!ag) return toast("Agendamento não encontrado.", "error");
-  if (ag.status === "cancelado") return toast("Não é possível editar um agendamento cancelado.", "error");
-
-  openModal(
-    `Editar agendamento`,
-    `<div class="form-row form-row-2">
-      <div class="form-group">
-        <label class="form-label">Data *</label>
-        <input type="date" id="eag-data" class="form-control" value="${escapeHTML(ag.data)}">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Hora *</label>
-        <input type="time" id="eag-hora" class="form-control" value="${escapeHTML(ag.hora)}">
-      </div>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Local</label>
-      <input type="text" id="eag-local" class="form-control" value="${escapeHTML(ag.local)}" placeholder="Sala 02">
-    </div>
-    <div class="callout"><i class="bi bi-info-circle"></i><span>A alteração fica registrada na auditoria. O agendamento continua confirmado.</span></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-     <button class="btn btn-primary" onclick="salvarEdicaoAgendamento(${agId})">Salvar alterações</button>`,
-  );
-}
-
-export function salvarEdicaoAgendamento(agId) {
-  const ag = AGENDAMENTOS.find((a) => a.id === agId);
-  if (!ag) return;
-  const novaData = document.getElementById("eag-data").value;
-  const novaHora = document.getElementById("eag-hora").value;
-  const novoLocal = document.getElementById("eag-local").value.trim();
-  if (!novaData) return showError("eag-data", "Informe a nova data.");
-  if (!novaHora) return showError("eag-hora", "Informe o novo horário.");
-
-  // Verifica conflito: mesmo PACIENTE + mesmo estudante + mesmo slot
-  // Dois estudantes diferentes PODEM ter agendamentos no mesmo horário
-  if (
-    appointmentRepository.hasConflict({
-      pacienteId: ag.pacienteId,
-      estudanteId: ag.estudanteId,
-      data: novaData,
-      hora: novaHora,
-      excludeId: agId,
-    })
-  ) {
-    return toast("Já existe um agendamento para este paciente com este estudante neste horário.", "error");
-  }
-
-  appointmentRepository.update(agId, { data: novaData, hora: novaHora, local: novoLocal || "Consultório" });
-  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-  logAudit("agenda", "Editou agendamento", pac?.nome || "");
-  saveData();
-  closeModal();
-  toast("Agendamento atualizado.", "success");
-  navigate("agenda");
-}
-
-// ─────────────────────────────────────────────────────────────
-// confirmarCancelamentoAgendamento(agId)
-// Exibe diálogo de confirmação antes de cancelar um agendamento.
-// Cria overlay independente (não usa openModal) para não conflitar
-// com modais já abertos (ex: prontuário com abas).
-// executarCancelamentoAgendamento() faz o cancelamento de fato.
-// ─────────────────────────────────────────────────────────────
-export function confirmarCancelamentoAgendamento(agId) {
-  const ag = AGENDAMENTOS.find((a) => a.id === agId);
-  if (!ag) return;
-  if (ag.status === "cancelado") return toast("Este agendamento já está cancelado.", "warning");
-  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-  const dataFmt = formatBR(ag.data);
-
-  // Remove instância anterior para evitar duplo disparo
-  const existing = document.getElementById("cancel-confirm");
-  if (existing) existing.remove();
-
-  const confirmDiv = document.createElement("div");
-  confirmDiv.id = "cancel-confirm";
-  confirmDiv.className = "modal-overlay";
-  confirmDiv.style.zIndex = "3000";
-  confirmDiv.innerHTML = `
-    <div class="modal confirm-dialog" role="alertdialog" aria-labelledby="cancel-title" onclick="event.stopPropagation()">
-      <div class="confirm-icon is-danger"><i class="bi bi-calendar-x"></i></div>
-      <h3 id="cancel-title">Cancelar este atendimento?</h3>
-      <p><strong>${escapeHTML(pac?.nome || "Paciente")}</strong>, ${dataFmt} às ${escapeHTML(ag.hora)}, ${escapeHTML(ag.local)}.</p>
-      <p class="confirm-note">O cancelamento fica registrado na auditoria e não pode ser desfeito.</p>
-      <div class="confirm-actions">
-        <button class="btn btn-secondary" onclick="document.getElementById('cancel-confirm').remove()">Manter atendimento</button>
-        <button class="btn btn-danger" onclick="executarCancelamentoAgendamento(${agId})">Cancelar atendimento</button>
-      </div>
-    </div>`;
-  document.body.appendChild(confirmDiv);
-  confirmDiv.addEventListener("click", (e) => { if (e.target === confirmDiv) confirmDiv.remove(); });
-}
-
-export function executarCancelamentoAgendamento(agId) {
-  const conf = document.getElementById("cancel-confirm");
-  if (conf) conf.remove();
-  const ag = AGENDAMENTOS.find((a) => a.id === agId);
-  if (!ag) return;
-  const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
-  appointmentRepository.cancel(agId, pac?.nome || "");
-  toast("Agendamento cancelado.", "warning");
-  navigate("agenda");
-}
-
+// Agendamentos (criação, edição, cancelamento e pedidos dos pacientes):
+// ver modals/agendamentos.js.

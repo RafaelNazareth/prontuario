@@ -5,7 +5,8 @@
 
 import { currentUser, navigate } from "../core/auth.js";
 import { openProntuario } from "./dashboard.js";
-import { AGENDAMENTOS, EVOLUCOES, FALTAS, NOTIFICACOES, PACIENTES, escapeHTML, logAudit, saveData } from "../core/store.js";
+import { AGENDAMENTOS, EVOLUCOES, FALTAS, NOTIFICACOES, PACIENTES, SOLICITACOES_AGENDAMENTO, escapeHTML, logAudit, saveData } from "../core/store.js";
+import { can } from "../core/permissions.js";
 import { toast } from "../core/utils.js";
 import { absenceRepository } from "../repositories/absenceRepository.js";
 import { notificationRepository } from "../repositories/notificationRepository.js";
@@ -60,6 +61,27 @@ export function getNotificacoesAtivas() {
           ts: ag.data + " " + ag.hora
         });
       }
+    });
+  }
+
+  // ── Pedidos de agendamento dos pacientes (só para técnico, que agenda) ──
+  if (currentUser.papel === "tecnico") {
+    const TIPOS = { agendar: "agendamento", remarcar: "remarcação", cancelar: "cancelamento" };
+    SOLICITACOES_AGENDAMENTO.filter((p) => p.status === "pendente").forEach((p) => {
+      const notifId = "ped_ag_" + p.id;
+      if (NOTIFICACOES.some((n) => n.id === notifId && n.lida)) return;
+      const pac = PACIENTES.find((x) => x.id === p.pacienteId);
+      notifs.push({
+        id: notifId,
+        tipo: "pedido_agendamento",
+        icone: "bi-calendar-plus",
+        cor: "#1a6b2e",
+        titulo: "Pedido de " + (TIPOS[p.tipo] || "agendamento"),
+        desc: `${escapeHTML(pac?.nome || "Paciente")} pediu ${TIPOS[p.tipo] || "agendamento"}${p.preferencia ? ": " + escapeHTML(p.preferencia) : "."}`,
+        tipoAcao: "ABRIR_AGENDA",
+        lida: false,
+        ts: p.criadoEm ? formatBR(String(p.criadoEm).slice(0, 10)) : "",
+      });
     });
   }
 
@@ -190,7 +212,9 @@ export function acionarNotif(notifId) {
   if (!notif) return;
 
   // Despachante seguro sem uso de eval()
-  if (notif.tipoAcao === "OPEN_PRONTUARIO" && notif.pacienteId) {
+  if (notif.tipoAcao === "ABRIR_AGENDA") {
+    navigate("agenda");
+  } else if (notif.tipoAcao === "OPEN_PRONTUARIO" && notif.pacienteId) {
     openProntuario(notif.pacienteId);
   } else if (notif.tipoAcao === "CONFIRMAR_TROCA" && notif.pacienteId) {
     confirmarTrocaPaciente(notif.pacienteId);
@@ -240,8 +264,10 @@ export function startNotifBadgePolling() {
 // ─────────────────────────────────────────────────────────────
 
 export function registrarFalta(agId) {
+  if (!can("appointment.registerAbsence")) return toast("Sem permissão para registrar falta.", "error");
   const ag = AGENDAMENTOS.find((a) => a.id === agId);
   if (!ag) return;
+  if (ag.status !== AppointmentStatus.CONFIRMADO) return toast("Só é possível registrar falta em atendimento confirmado.", "warning");
   if (ag.status === AppointmentStatus.FALTOU) return toast("Falta já registrada.", "warning");
   const pac = PACIENTES.find((p) => p.id === ag.pacienteId);
 
@@ -302,6 +328,7 @@ export function registrarFalta(agId) {
 }
 
 export function justificarFalta(faltaId) {
+  if (!can("appointment.justifyAbsence")) return toast("Só o técnico ou o supervisor do caso justifica faltas.", "error");
   const f = FALTAS.find((x) => x.id === faltaId);
   if (!f) return;
   const pac = PACIENTES.find((p) => p.id === f.pacienteId);
@@ -343,6 +370,7 @@ export function confirmarTrocaPaciente(pacienteId) {
 }
 
 export function executarTrocaPaciente(pacienteId) {
+  if (!can("appointment.cancel")) return toast("Somente o técnico responsável encerra o caso e cancela os atendimentos.", "error");
   const confirmEl = document.getElementById("troca-confirm");
   const motivo = document.getElementById("troca-motivo")?.value || "";
   if (confirmEl) confirmEl.remove();

@@ -58,10 +58,12 @@ test("appointmentRepository.hasConflict detecta conflito de mesmo paciente+estud
   assert.equal(appointmentRepository.hasConflict({ pacienteId: 1, estudanteId: 1, data: "2026-12-01", hora: "10:00", excludeId: a.id }), false);
 });
 
-test("appointmentRepository.hasConflict permite dois estudantes diferentes no mesmo horário", () => {
+test("appointmentRepository.hasConflict permite dois estudantes diferentes, com pacientes diferentes, no mesmo horário", () => {
   appointmentRepository.create({ pacienteId: 2, estudanteId: 10, supervisorId: 1, data: "2026-12-02", hora: "11:00", local: "Sala 2", modalidade: "presencial" });
-  const conflict = appointmentRepository.hasConflict({ pacienteId: 2, estudanteId: 11, data: "2026-12-02", hora: "11:00" });
-  assert.equal(conflict, false);
+  assert.equal(appointmentRepository.hasConflict({ pacienteId: 4, estudanteId: 11, data: "2026-12-02", hora: "11:00" }), false);
+  // o mesmo paciente não pode ter dois atendimentos no mesmo horário, nem o mesmo estagiário
+  assert.equal(appointmentRepository.hasConflict({ pacienteId: 2, estudanteId: 11, data: "2026-12-02", hora: "11:00" }), true);
+  assert.equal(appointmentRepository.hasConflict({ pacienteId: 4, estudanteId: 10, data: "2026-12-02", hora: "11:00" }), true);
 });
 
 test("appointmentRepository.hasConflict ignora agendamentos cancelados", () => {
@@ -93,11 +95,13 @@ test("clinicalRepository.addEvolution numera sequencialmente e nunca sobrescreve
   assert.equal(clinicalRepository.listEvolutions(502).length, 2);
 });
 
-test("documentRepository.create gera tamanho determinístico (mesmo nome -> mesmo tamanho sempre)", () => {
-  const d1 = documentRepository.create(503, { nome: "Laudo.pdf", tipo: "pdf" }, "Dr. Teste");
-  const d2 = documentRepository.create(503, { nome: "Laudo.pdf", tipo: "pdf" }, "Dr. Teste");
-  assert.equal(d1.tamanho, d2.tamanho, "o mesmo nome de arquivo deve sempre gerar o mesmo tamanho simulado");
-  assert.match(d1.tamanho, /^\d+ KB$/);
+test("documentRepository lista só documentos com arquivo digital em listWithFile", () => {
+  store.DOCUMENTOS[503] = [
+    { id: "d1", nome: "Antigo.pdf", tipo: "pdf" },
+    { id: "d2", nome: "Laudo.pdf", tipo: "pdf", arquivo: { id: "a_x", nome: "Laudo.pdf", tamanho: 10, sha256: "0".repeat(64) } },
+  ];
+  assert.equal(documentRepository.listByPatient(503).length, 2);
+  assert.deepEqual(documentRepository.listWithFile(503).map((d) => d.id), ["d2"]);
 });
 
 test("absenceRepository dispara contagem correta e não conta faltas justificadas", () => {

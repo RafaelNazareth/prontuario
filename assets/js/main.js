@@ -20,11 +20,12 @@ import { detectarModo, gravarAoOcultarAba } from "./infrastructure/jsonDataSourc
 import { logAudit } from "./core/store.js";
 import * as modRegistros from "./modals/registros.js";
 import * as modModais from "./modals/modals.js";
+import * as modAgendamentos from "./modals/agendamentos.js";
 import * as pagAcesso from "./pages/acesso.js";
 import * as pagPrivacidade from "./pages/privacidade.js";
 
 import { openProntuario } from "./pages/dashboard.js";
-import { filterPacienteStatus, filterPacientes, switchTab } from "./pages/pacientes.js";
+import { filterPacienteStatus, filterPacientes, irParaPaginaPacientes, switchTab } from "./pages/pacientes.js";
 import { agendaIrParaHoje, agendaProximaSemana, agendaSemanaAnterior } from "./pages/agenda.js";
 import {
   filtrarPacientesSolicitacao,
@@ -43,9 +44,7 @@ import {
 
 import {
   closeModal,
-  confirmarCancelamentoAgendamento,
   confirmarSalvarEvolucao,
-  executarCancelamentoAgendamento,
   executarSalvarEvolucao,
   inserirTemplateEvolucao,
   maskCPF,
@@ -53,16 +52,12 @@ import {
   alternarOrigemDocumento,
   openModalAnamnese,
   openModalDocumento,
-  openModalEditarAgendamento,
   openModalEditarPaciente,
   openModalEvolucao,
-  openModalNovoAgendamento,
   openModalNovoPaciente,
   openModalNovoUsuario,
   openModalUploadDocumento,
-  salvarAgendamento,
   salvarAnamnese,
-  salvarEdicaoAgendamento,
   salvarEdicaoPaciente,
   salvarNovoPaciente,
   salvarNovoUsuario,
@@ -85,6 +80,7 @@ Object.assign(window, {
   openProntuario,
   filterPacienteStatus,
   filterPacientes,
+  irParaPaginaPacientes,
   switchTab,
   // agenda
   agendaIrParaHoje,
@@ -104,9 +100,7 @@ Object.assign(window, {
   toggleNotifPanel,
   // modais
   closeModal,
-  confirmarCancelamentoAgendamento,
   confirmarSalvarEvolucao,
-  executarCancelamentoAgendamento,
   executarSalvarEvolucao,
   inserirTemplateEvolucao,
   maskCPF,
@@ -114,16 +108,12 @@ Object.assign(window, {
   alternarOrigemDocumento,
   openModalAnamnese,
   openModalDocumento,
-  openModalEditarAgendamento,
   openModalEditarPaciente,
   openModalEvolucao,
-  openModalNovoAgendamento,
   openModalNovoPaciente,
   openModalNovoUsuario,
   openModalUploadDocumento,
-  salvarAgendamento,
   salvarAnamnese,
-  salvarEdicaoAgendamento,
   salvarEdicaoPaciente,
   salvarNovoPaciente,
   salvarNovoUsuario,
@@ -163,7 +153,14 @@ document.getElementById("modal-close-btn").addEventListener("click", () => close
 // Módulos cujas funções são chamadas por atributos onclick no HTML gerado:
 // todas as funções exportadas ficam disponíveis no escopo global.
 const somenteFuncoes = (m) => Object.fromEntries(Object.entries(m).filter(([, v]) => typeof v === "function"));
-Object.assign(window, somenteFuncoes(modModais), somenteFuncoes(modRegistros), somenteFuncoes(pagAcesso), somenteFuncoes(pagPrivacidade));
+Object.assign(
+  window,
+  somenteFuncoes(modModais),
+  somenteFuncoes(modAgendamentos),
+  somenteFuncoes(modRegistros),
+  somenteFuncoes(pagAcesso),
+  somenteFuncoes(pagPrivacidade),
+);
 
 // Consultas a áreas sensíveis (ex.: registro documental) ficam auditadas.
 window.registrarConsulta = (evento, pacienteId) =>
@@ -171,7 +168,13 @@ window.registrarConsulta = (evento, pacienteId) =>
 
 // Sessão encerrada no servidor (inatividade, usuário inativado, servidor reiniciado)
 window.addEventListener("pep:unauthorized", (e) => {
-  const msg = e.detail?.motivo === "inatividade" ? "Sua sessão foi encerrada por inatividade. Entre novamente." : "Sua sessão terminou. Entre novamente.";
+  const motivo = e.detail?.motivo;
+  const msg =
+    motivo === "inatividade"
+      ? "Sua sessão foi encerrada por inatividade. Entre novamente."
+      : motivo === "acesso_expirado"
+        ? "Seu acesso temporário ao prontuário expirou. Procure o Serviço-Escola para pedir um novo acesso."
+        : "Sua sessão terminou. Entre novamente.";
   doLogout({ motivo: "inatividade", mensagem: msg });
 });
 
@@ -209,7 +212,7 @@ function abrirSobreDemonstracao() {
 window.restaurarDadosDemonstracao = async () => {
   if (!confirm("Apagar as alterações feitas nesta demonstração e voltar aos dados de exemplo?")) return;
   const { restaurarDemonstracao } = await import("./infrastructure/servidorDemo.js");
-  restaurarDemonstracao();
+  await restaurarDemonstracao();
   location.reload();
 };
 

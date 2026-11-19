@@ -1,0 +1,17 @@
+{
+  "_leia": "Copie este arquivo para data/instituicao.json e preencha com os dados reais na implantação. O servidor lê o arquivo ao iniciar (ou o caminho em PEP_INSTITUICAO_ARQUIVO).",
+  "controlador": "Faculdade de Ciências Médicas da Santa Casa de São Paulo (FCMSCSP)",
+  "servico": "Serviço-Escola de Psicologia",
+  "endereco": "Endereço completo do Serviço-Escola",
+  "horario": "Segunda a sexta, das 8h às 17h",
+  "contato": "e-mail ou telefone de contato do Serviço-Escola",
+  "encarregado": {
+    "nome": "Nome completo do encarregado de proteção de dados (DPO)",
+    "email": "e-mail do encarregado",
+    "telefone": "telefone do encarregado (opcional)"
+  },
+  "acessoPortal": {
+    "_leia": "Dias de validade do login e da senha temporários gerados para o paciente consultar o prontuário (1 a 365). Prazo ainda a definir pela instituição: troque null pelo número de dias.",
+    "validadeDias": null
+  }
+}

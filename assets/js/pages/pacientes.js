@@ -27,6 +27,11 @@ import {
   getPacientesPermitidos,
 } from "../core/store.js";
 import { can } from "../core/permissions.js";
+import { formatarTamanho } from "../shared/arquivos.js";
+import { htmlPaginacao, paginar } from "../core/paginacao.js";
+
+const POR_PAGINA_PACIENTES = 20;
+let _paginaPacientes = 1;
 import { today, formatBR, formatLong, weekdayAbbrev, calculateAge } from "../core/dateService.js";
 import {
   MODALIDADES_DOCUMENTO,
@@ -86,6 +91,8 @@ export function renderPacientes() {
   const lista = getPacientesPermitidos();
   _filtroTexto = "";
   _filtroStatus = "";
+  _paginaPacientes = 1;
+  const pag = paginar(lista, 1, POR_PAGINA_PACIENTES);
   const ativos = lista.filter((p) => p.status === "ativo").length;
 
   return `<div class="page-header">
@@ -103,7 +110,8 @@ export function renderPacientes() {
         <span class="filter-count" id="pac-count">${lista.length} ${lista.length === 1 ? "resultado" : "resultados"}</span>
       </div>
     </div>
-    <div class="table-responsive"><table><thead><tr><th>Paciente</th><th>CPF</th><th>Estudantes</th><th>Supervisão</th><th>Status</th><th></th></tr></thead><tbody id="pac-tbody">${lista.map(renderPacienteRow).join("")}</tbody></table></div>
+    <div class="table-responsive"><table><thead><tr><th>Paciente</th><th>CPF</th><th>Estudantes</th><th>Supervisão</th><th>Status</th><th></th></tr></thead><tbody id="pac-tbody">${pag.itens.map(renderPacienteRow).join("")}</tbody></table></div>
+    <div id="pac-paginacao">${htmlPaginacao(pag, "irParaPaginaPacientes", "pacientes")}</div>
   </div>`;
 }
 
@@ -130,8 +138,12 @@ function _aplicarFiltros() {
   const lista = getPacientesPermitidos().filter(
     (p) => (!q || p.nome.toLowerCase().includes(q) || (p.nomeSocial || "").toLowerCase().includes(q)) && (!_filtroStatus || p.status === _filtroStatus),
   );
+  const pag = paginar(lista, _paginaPacientes, POR_PAGINA_PACIENTES);
+  _paginaPacientes = pag.pagina;
+  const pagEl = document.getElementById("pac-paginacao");
+  if (pagEl) pagEl.innerHTML = htmlPaginacao(pag, "irParaPaginaPacientes", "pacientes");
   document.getElementById("pac-tbody").innerHTML = lista.length
-    ? lista.map(renderPacienteRow).join("")
+    ? pag.itens.map(renderPacienteRow).join("")
     : `<tr><td colspan="6"><div class="empty-state compact"><i class="bi bi-search"></i><h3>Nenhum paciente encontrado</h3><p>Confira a grafia do nome ou limpe o filtro de status.</p></div></td></tr>`;
   const count = document.getElementById("pac-count");
   if (count) count.textContent = `${lista.length} ${lista.length === 1 ? "resultado" : "resultados"}`;
@@ -139,10 +151,16 @@ function _aplicarFiltros() {
 
 export function filterPacientes(q) {
   _filtroTexto = q || "";
+  _paginaPacientes = 1;
   _aplicarFiltros();
 }
 export function filterPacienteStatus(s) {
   _filtroStatus = s || "";
+  _paginaPacientes = 1;
+  _aplicarFiltros();
+}
+export function irParaPaginaPacientes(n) {
+  _paginaPacientes = n;
   _aplicarFiltros();
 }
 
@@ -190,6 +208,7 @@ export function renderProntuario(pid, abaInicial = "resumo") {
     </div>
     <div class="patient-actions">
       <button class="btn btn-secondary" onclick="gerarPdfProntuario(${pid})" title="Imprimir prontuário"><i class="bi bi-printer"></i> Imprimir</button>
+      ${can("user.create") ? `<button class="btn btn-secondary" onclick="openModalAcessoTemporario(${pid})" title="Gerar login e senha temporários para o paciente consultar o prontuário"><i class="bi bi-key"></i> Acesso do paciente</button>` : ""}
       ${can("document.emit") && ativo ? `<button class="btn btn-secondary" onclick="openModalEmitirDocumento(${pid})"><i class="bi bi-file-earmark-text"></i> Emitir documento</button>` : ""}
       ${can("case.close") && ativo ? `<button class="btn btn-secondary" onclick="openModalEncerramento(${pid})"><i class="bi bi-door-closed"></i> Encerrar</button>` : ""}
       ${can("evolution.create") && ativo ? `<button class="btn btn-primary" onclick="openModalEvolucao(${pid})"><i class="bi bi-plus-lg"></i> Nova evolução</button>` : ""}
@@ -370,7 +389,7 @@ function _docCard(pid, d) {
   let meta;
   if (externo && d.origem) meta = `${e(d.origem.profissional)} · ${e(d.origem.crp)}`;
   else if (emit) meta = `Para ${e(d.destinatario || "—")} · ${_fmtDataISO(d.dataEmissao)}`;
-  else meta = [d.tamanho, d.data ? formatBR(d.data) : null].filter(Boolean).map(e).join(" · ");
+  else meta = [d.arquivo ? formatarTamanho(d.arquivo.tamanho) : "Sem arquivo digital", d.data ? formatBR(d.data) : null].filter(Boolean).map(e).join(" · ");
   const status = emit
     ? [d.validacao?.status === "pendente" ? "Aguardando co-assinatura" : null, ["relatorio", "laudo"].includes(d.modalidade) && !d.devolutiva ? "Devolutiva pendente" : null, !d.entrega ? "Entrega pendente" : null].filter(Boolean)
     : [];
@@ -464,7 +483,8 @@ export function renderTabRegistroDocumental(pid) {
 // ── Agenda ───────────────────────────────────────────────────
 export function renderTabAgendaPaciente(pid) {
   const ags = AGENDAMENTOS.filter((a) => a.pacienteId === pid).sort((a, b) => b.data.localeCompare(a.data) || b.hora.localeCompare(a.hora));
-  const canManage = can("appointment.manage") && currentUser.papel !== "paciente";
+  const canManage = can("appointment.manage");
+  const canFalta = can("appointment.registerAbsence");
   const hoje = today();
   const rows = ags
     .map((ag) => {
@@ -473,14 +493,14 @@ export function renderTabAgendaPaciente(pid) {
       const isFaltou = ag.status === "faltou";
       const faltaInfo = FALTAS.find((f) => f.agId === ag.id);
       const acoes =
-        !isCanceled && !isFaltou && canManage
+        !isCanceled && !isFaltou && (canManage || canFalta)
           ? `<div class="action-btns" style="justify-content:flex-end;flex-wrap:wrap">
-           ${!isPast ? `<button class="btn btn-secondary btn-sm" onclick="openModalEditarAgendamento(${ag.id})">Editar</button>` : ""}
-           <button class="btn btn-warn-soft btn-sm" onclick="registrarFalta(${ag.id})">Registrar falta</button>
-           ${!isPast ? `<button class="btn btn-danger-soft btn-sm" onclick="confirmarCancelamentoAgendamento(${ag.id})">Cancelar</button>` : ""}
+           ${!isPast && canManage ? `<button class="btn btn-secondary btn-sm" onclick="openModalEditarAgendamento(${ag.id})">Editar</button>` : ""}
+           ${canFalta && ag.data <= hoje ? `<button class="btn btn-warn-soft btn-sm" onclick="registrarFalta(${ag.id})">Registrar falta</button>` : ""}
+           ${!isPast && canManage ? `<button class="btn btn-danger-soft btn-sm" onclick="confirmarCancelamentoAgendamento(${ag.id})">Cancelar</button>` : ""}
          </div>`
           : isFaltou
-            ? faltaInfo && !faltaInfo.justificada && ["tecnico", "supervisor"].includes(currentUser.papel)
+            ? faltaInfo && !faltaInfo.justificada && can("appointment.justifyAbsence")
               ? `<div class="action-btns" style="justify-content:flex-end"><button class="btn btn-ok-soft btn-sm" onclick="justificarFalta('${faltaInfo?.id}')"><i class="bi bi-check2"></i> Justificar falta</button></div>`
               : `<span class="muted" style="font-size:13px">${faltaInfo?.justificada ? "Falta justificada" : "Falta registrada"}</span>`
             : `<span class="muted" style="font-size:13px">${isPast ? "Concluído" : "—"}</span>`;
@@ -497,7 +517,7 @@ export function renderTabAgendaPaciente(pid) {
   return `<div class="card">
     <div class="card-header">
       <h3 class="card-title">Agendamentos</h3>
-      ${can("appointment.create") && currentUser.papel !== "paciente" ? `<button class="btn btn-secondary btn-sm" onclick="openModalNovoAgendamento()"><i class="bi bi-plus-lg"></i> Agendar</button>` : ""}
+      ${can("appointment.create") && PACIENTES.find((p) => p.id === pid)?.status !== "inativo" ? `<button class="btn btn-secondary btn-sm" onclick="openModalNovoAgendamento({ pacienteId: ${pid} })"><i class="bi bi-plus-lg"></i> Agendar</button>` : ""}
     </div>
     <div class="table-responsive">
       <table>

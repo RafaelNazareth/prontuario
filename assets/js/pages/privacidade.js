@@ -58,7 +58,7 @@ export function htmlAvisoPrivacidade(inst = {}) {
   <p>O prontuário é guardado por <strong>${guarda} anos após o último registro</strong> (Lei nº 13.787/2018, art. 6º; a Resolução CFP nº 001/2009 exige no mínimo 5 anos). Para menores de idade, o prazo é contado a partir dos 18 anos. Enquanto houver dever de guarda, o prontuário não pode ser eliminado (LGPD, art. 16, I).</p>
 
   <h4>Seus direitos</h4>
-  <p>Você ou seu representante legal pode, gratuitamente: confirmar que tratamos seus dados, <strong>acessar integralmente o prontuário</strong> (Resolução CFP nº 001/2009, art. 5º, II), pedir cópia, pedir correção de dados incorretos, saber com quem os dados foram compartilhados, revogar consentimentos opcionais e reclamar à ANPD. A resposta completa é dada em até <strong>${prazo} dias</strong> (LGPD, art. 19, II). Pacientes podem fazer as solicitações pelo portal, na seção "Meu prontuário".</p>
+  <p>Você ou seu representante legal pode, gratuitamente: confirmar que tratamos seus dados, <strong>acessar integralmente o prontuário</strong> (Resolução CFP nº 001/2009, art. 5º, II), pedir cópia, pedir correção de dados incorretos, saber com quem os dados foram compartilhados, revogar consentimentos opcionais e reclamar à ANPD. A resposta completa é dada em até <strong>${prazo} dias</strong> (LGPD, art. 19, II). As solicitações são feitas presencialmente no Serviço-Escola, por telefone ou por e-mail${inst.contato ? ` (${e(inst.contato)})` : ""}.</p>
 
   <h4>Como protegemos</h4>
   <p>Acesso individual com senha, bloqueio após tentativas inválidas, encerramento da sessão por inatividade, permissões por função, trilha de auditoria de toda consulta e alteração, registros clínicos que não podem ser apagados e cópias de segurança cifradas. Em caso de incidente de segurança com risco relevante, a ANPD e os titulares são comunicados em até 3 dias úteis (Resolução CD/ANPD nº 15/2024).</p>
@@ -134,7 +134,7 @@ export function exigirTrocaSenha({ obrigatoria = false } = {}) {
     const el = abrirBloqueante(`<div class="modal" role="dialog" aria-labelledby="senha-title" style="max-width:480px">
       <div class="modal-header"><div class="modal-title" id="senha-title">${obrigatoria ? "Defina uma nova senha" : "Alterar senha"}</div></div>
       <div class="modal-body">
-        ${obrigatoria ? `<div class="callout callout-warn" style="margin-bottom:16px"><i class="bi bi-key"></i><span>Sua senha foi definida pelo administrador. Crie uma senha pessoal para continuar.</span></div>` : ""}
+        ${obrigatoria ? `<div class="callout callout-warn" style="margin-bottom:16px"><i class="bi bi-key"></i><span>Sua senha foi definida pelo técnico responsável. Crie agora a sua senha pessoal: o sistema só libera o acesso depois da troca.</span></div>` : ""}
         <div class="form-group"><label class="form-label" for="sn-atual">Senha atual</label><input type="password" id="sn-atual" class="form-control" autocomplete="off"></div>
         <div class="form-group"><label class="form-label" for="sn-nova">Nova senha</label><input type="password" id="sn-nova" class="form-control" autocomplete="off">
           <div class="form-hint">Mínimo de ${pol.minimo} caracteres, com letras e números. Não use seu nome nem seu login.</div></div>

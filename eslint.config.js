@@ -35,6 +35,8 @@ export default [
         globalThis: "readonly",
         btoa: "readonly",
         atob: "readonly",
+        FileReader: "readonly",
+        indexedDB: "readonly",
       },
     },
     rules: {

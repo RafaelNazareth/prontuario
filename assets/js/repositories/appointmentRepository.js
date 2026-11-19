@@ -23,20 +23,21 @@ export function getById(id) {
 }
 
 /**
- * Verifica conflito de horário: mesmo paciente + mesmo estudante + mesmo
- * slot, ignorando agendamentos já cancelados. Réplica da regra que já
- * existia duplicada em modals.js (criação e edição de agendamento).
- * @param {{pacienteId:number, estudanteId:number, data:string, hora:string, excludeId?:number}} params
+ * Verifica conflito de horário, com a mesma regra do servidor
+ * (shared/politica.js): no mesmo dia e hora não pode haver dois
+ * atendimentos confirmados do MESMO paciente nem do MESMO estagiário.
+ * Estagiários diferentes, com pacientes diferentes, podem atender no
+ * mesmo horário.
+ * @param {{pacienteId:number, estudanteId:number|null, data:string, hora:string, excludeId?:number}} params
  */
 export function hasConflict({ pacienteId, estudanteId, data, hora, excludeId }) {
   return AGENDAMENTOS.some(
     (a) =>
       a.id !== excludeId &&
-      a.pacienteId === pacienteId &&
-      a.estudanteId === estudanteId &&
+      a.status === AppointmentStatus.CONFIRMADO &&
       a.data === data &&
       a.hora === hora &&
-      a.status !== AppointmentStatus.CANCELADO,
+      (a.pacienteId === pacienteId || (estudanteId != null && a.estudanteId === estudanteId)),
   );
 }
 

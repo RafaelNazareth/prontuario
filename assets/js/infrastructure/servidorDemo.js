@@ -9,7 +9,8 @@
 //     escopo por papel, gravação conferida item a item, co-assinatura,
 //     retificação versionada, trilha de auditoria encadeada.
 //   - Os dados partem de data/seed.json e ficam no localStorage de
-//     cada visitante. Nada sai do navegador.
+//     cada visitante; os arquivos anexados ficam no IndexedDB do
+//     navegador. Nada sai do navegador.
 //   - Senhas: as contas de demonstração usam "1234"; contas criadas
 //     na demonstração guardam SHA-256 com salt.
 //
@@ -18,10 +19,19 @@
 // ============================================================
 
 import { sha256Hex } from "../shared/sha256.js";
-import { GUARDA, INSTITUICAO, PRIVACIDADE, SEGURANCA, SOFTWARE } from "../shared/configuracao.js";
+import { ACESSO_PORTAL, GUARDA, INSTITUICAO, PRIVACIDADE, SEGURANCA, SOFTWARE } from "../shared/configuracao.js";
 import { EVENTOS, EVENTOS_INFORMADOS_PELO_CLIENTE, filtrarTrilha, registrarEvento, trilhaCsv, verificarTrilha } from "../shared/auditoria.js";
 import { aplicarAlteracoes, escopo, pacientesPermitidos, usuarioPublico } from "../shared/politica.js";
 import { estaBloqueado, registrarFalhaLogin, registrarSucessoLogin, validarPoliticaSenha } from "../shared/regrasAcesso.js";
+import { validarArquivo } from "../shared/arquivos.js";
+import {
+  ErroUsuario,
+  acessoExpirado,
+  aplicarEdicaoUsuario,
+  aplicarRedefinicaoSenha,
+  gerarAcessoTemporario,
+  montarNovoUsuario,
+} from "../shared/usuarios.js";
 
 const CHAVE_DB = "pep_demo_db_v1";
 const CHAVE_SESSAO = "pep_demo_sessao";
@@ -51,9 +61,10 @@ async function db() {
     const r = await fetch("./data/seed.json", { cache: "no-store" });
     if (!r.ok) throw new ErroDemo(500, "Não foi possível carregar os dados de demonstração (data/seed.json).");
     _db = await r.json();
-    for (const k of ["REGISTRO_DOCUMENTAL", "COMPARTILHAMENTOS", "ANAMNESES", "EVOLUCOES", "DOCUMENTOS"]) _db[k] ||= {};
     salvar();
   }
+  for (const k of ["REGISTRO_DOCUMENTAL", "COMPARTILHAMENTOS", "ANAMNESES", "EVOLUCOES", "DOCUMENTOS"]) _db[k] ||= {};
+  for (const k of ["SOLICITACOES_AGENDAMENTO", "NOTIFICACOES", "FALTAS", "ACESSO_PACIENTE"]) _db[k] ||= [];
   return _db;
 }
 
@@ -66,7 +77,7 @@ function salvar() {
 }
 
 /** Apaga as alterações feitas na demonstração e volta aos dados de exemplo. */
-export function restaurarDemonstracao() {
+export async function restaurarDemonstracao() {
   try {
     localStorage.removeItem(CHAVE_DB);
     sessionStorage.removeItem(CHAVE_SESSAO);
@@ -74,7 +85,76 @@ export function restaurarDemonstracao() {
     // armazenamento indisponível: nada a limpar
   }
   _db = null;
+  await apagarArquivosDemo();
 }
+
+// ── Arquivos anexados (IndexedDB; em memória se indisponível) ──
+const BANCO_ARQUIVOS = "pep_demo_arquivos";
+const _arquivosMemoria = new Map();
+
+function abrirIndexedDb() {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((ok) => {
+    try {
+      const r = indexedDB.open(BANCO_ARQUIVOS, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("arquivos");
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => ok(null);
+    } catch {
+      ok(null);
+    }
+  });
+}
+
+async function operarArquivos(modo, fn) {
+  const idb = await abrirIndexedDb();
+  if (!idb) return undefined;
+  return new Promise((ok, falha) => {
+    const tx = idb.transaction("arquivos", modo);
+    const req = fn(tx.objectStore("arquivos"));
+    tx.oncomplete = () => {
+      idb.close();
+      ok(req?.result);
+    };
+    tx.onerror = () => falha(tx.error);
+  });
+}
+
+async function guardarArquivoDemo(id, bytes) {
+  _arquivosMemoria.set(id, bytes);
+  try {
+    await operarArquivos("readwrite", (st) => st.put(bytes, id));
+  } catch (e) {
+    console.warn("[PEP demo] Arquivo guardado só até fechar a página:", e.message);
+  }
+}
+
+async function lerArquivoDemo(id) {
+  if (_arquivosMemoria.has(id)) return _arquivosMemoria.get(id);
+  try {
+    const r = await operarArquivos("readonly", (st) => st.get(id));
+    return r ? new Uint8Array(r) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function apagarArquivosDemo() {
+  _arquivosMemoria.clear();
+  try {
+    await operarArquivos("readwrite", (st) => st.clear());
+  } catch {
+    // nada a apagar
+  }
+}
+
+async function sha256Bytes(bytes) {
+  const h = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const novoId = (prefixo) =>
+  `${prefixo}_${typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)}`;
 
 // ── Senhas da demonstração ───────────────────────────────────
 function hashDemo(senha, salt) {
@@ -110,7 +190,7 @@ function auditar(d, user, tipo, extra = {}) {
   registrarEvento(d, { tipo, userId: user?.id ?? null, papel: user?.papel ?? null, ip: IP, ...extra });
 }
 
-function exigirSessao(d) {
+function exigirSessao(d, { permitirTrocaPendente = false } = {}) {
   const s = lerSessao();
   if (!s) throw new ErroDemo(401, "Faça login para continuar.", "sem_sessao");
   if (Date.now() - s.ultimaAtividade > SEGURANCA.inatividadeMinutos * 60000) {
@@ -121,6 +201,13 @@ function exigirSessao(d) {
   }
   const user = d.USERS.find((u) => u.id === s.userId);
   if (!user || user.ativo === false) throw new ErroDemo(401, "Faça login para continuar.", "usuario_inativo");
+  if (acessoExpirado(user)) {
+    gravarSessao(null);
+    throw new ErroDemo(401, "Seu acesso temporário ao prontuário expirou.", "acesso_expirado");
+  }
+  // Troca de senha obrigatória pendente: só sessão, termo e a própria troca.
+  if (user.seguranca?.trocaObrigatoria && !permitirTrocaPendente)
+    throw new ErroDemo(403, "Defina a sua senha pessoal para continuar.", "troca_senha");
   s.ultimaAtividade = Date.now();
   gravarSessao(s);
   return user;
@@ -143,13 +230,15 @@ function institucional(d) {
     versaoTermo: PRIVACIDADE.versaoTermo,
     prazoRespostaTitularDias: PRIVACIDADE.prazoRespostaTitularDias,
     guardaAnos: GUARDA.anosAposUltimoRegistro,
+    pendencias: ACESSO_PORTAL.definido ? [] : ["acessoPortal.validadeDias"],
+    acessoPortalDias: ACESSO_PORTAL.validadeDias,
     modoDemonstracao: true,
   };
 }
 
 function respostaSessao(d, user, extra = {}) {
   return {
-    usuario: { ...usuarioPublico(user), login: user.login },
+    usuario: { ...usuarioPublico(user), login: user.login, acessoExpiraEm: user.papel === "paciente" ? user.acessoExpiraEm : undefined },
     termoPendente: !user.termos?.[PRIVACIDADE.versaoTermo],
     trocaObrigatoria: Boolean(user.seguranca?.trocaObrigatoria),
     config: {
@@ -179,6 +268,10 @@ const rotas = {
       auditar(d, user, registrarFalhaLogin(user) ? "login_bloqueado" : "login_falha");
       throw new ErroDemo(401, generico);
     }
+    if (acessoExpirado(user)) {
+      auditar(d, user, "login_falha", { complemento: "acesso temporário vencido" });
+      throw new ErroDemo(401, "Seu acesso temporário ao prontuário expirou. Procure o Serviço-Escola para pedir um novo acesso.");
+    }
     const resumo = registrarSucessoLogin(user);
     auditar(d, user, "login_sucesso");
     gravarSessao({ userId: user.id, criadaEm: Date.now(), ultimaAtividade: Date.now() });
@@ -192,10 +285,10 @@ const rotas = {
     return { ok: true };
   },
 
-  "GET /api/auth/me": (d) => respostaSessao(d, exigirSessao(d)),
+  "GET /api/auth/me": (d) => respostaSessao(d, exigirSessao(d, { permitirTrocaPendente: true })),
 
   "POST /api/auth/termo": (d, { versao }) => {
-    const user = exigirSessao(d);
+    const user = exigirSessao(d, { permitirTrocaPendente: true });
     if (versao !== PRIVACIDADE.versaoTermo) throw new ErroDemo(409, "Versão do termo desatualizada. Recarregue a página.");
     user.termos ||= {};
     user.termos[versao] = new Date().toISOString();
@@ -204,7 +297,7 @@ const rotas = {
   },
 
   "POST /api/auth/senha": (d, { senhaAtual, novaSenha }) => {
-    const user = exigirSessao(d);
+    const user = exigirSessao(d, { permitirTrocaPendente: true });
     reautenticar(user, senhaAtual);
     const erro = validarPoliticaSenha(novaSenha, user);
     if (erro) throw new ErroDemo(400, erro);
@@ -220,36 +313,60 @@ const rotas = {
     const admin = exigirSessao(d);
     exigirTecnico(admin);
     reautenticar(admin, b.senhaAdmin);
-    const nome = String(b.nome || "").trim();
-    const login = String(b.login || "").trim();
-    if (!nome || !login) throw new ErroDemo(400, "Informe nome e login.");
-    if (!/^[a-z0-9._-]{3,40}$/i.test(login)) throw new ErroDemo(400, "Login: 3 a 40 letras, números, ponto, hífen ou sublinhado.");
-    if (!["tecnico", "supervisor", "estudante"].includes(b.papel)) throw new ErroDemo(400, "Papel inválido.");
-    if (d.USERS.some((u) => u.login.toLowerCase() === login.toLowerCase())) throw new ErroDemo(409, "Já existe usuário com este login.");
-    if (b.papel !== "estudante" && !/^CRP \d{2}\/\d{4,6}$/.test(String(b.crp || "").trim()))
-      throw new ErroDemo(400, "Informe o CRP no formato CRP 06/123456.");
-    if (b.papel === "estudante" && !String(b.matricula || "").trim()) throw new ErroDemo(400, "Informe a matrícula do estudante.");
-    const erro = validarPoliticaSenha(b.senhaInicial, { nome, login });
-    if (erro) throw new ErroDemo(400, erro);
-    const id = Math.max(...d.USERS.filter((u) => u.papel !== "paciente").map((u) => u.id)) + 1;
-    const novo = {
-      id,
-      login,
-      nome,
-      papel: b.papel,
-      avatar: nome.split(" ").filter(Boolean).map((p) => p[0]).join("").slice(0, 2).toUpperCase(),
-      color: "#1a6b2e",
-      crp: b.papel !== "estudante" ? String(b.crp).trim() : null,
-      matricula: b.papel === "estudante" ? String(b.matricula).trim() : null,
-      ativo: true,
-      senhaDemo: novaSenhaDemo(b.senhaInicial),
-      seguranca: { trocaObrigatoria: true },
-      criadoEm: new Date().toISOString(),
-      criadoPorId: admin.id,
-    };
+    const novo = montarNovoUsuario(d, b, { adminId: admin.id, senha: (s) => ({ senhaDemo: novaSenhaDemo(s) }) });
     d.USERS.push(novo);
-    auditar(d, admin, "usuario_criado", { registroId: id, complemento: novo.papel });
+    auditar(d, admin, "usuario_criado", {
+      registroId: novo.id,
+      complemento: novo.papel,
+      pacienteId: novo.papel === "paciente" ? novo.id : null,
+    });
     return { usuario: usuarioPublico(novo, { completo: true }) };
+  },
+
+  "PUT /api/usuarios/:id": (d, b, { id }) => {
+    const admin = exigirSessao(d);
+    exigirTecnico(admin);
+    reautenticar(admin, b.senhaAdmin);
+    const alvo = d.USERS.find((u) => u.id === Number(id));
+    if (!alvo) throw new ErroDemo(404, "Usuário não encontrado.");
+    const { campos } = aplicarEdicaoUsuario(d, alvo, b);
+    if (campos.length) auditar(d, admin, "usuario_atualizado", { registroId: alvo.id, complemento: campos.join(",") });
+    return { usuario: usuarioPublico(alvo, { completo: true }), alterados: campos };
+  },
+
+  "POST /api/usuarios/:id/senha": (d, b, { id }) => {
+    const admin = exigirSessao(d);
+    exigirTecnico(admin);
+    reautenticar(admin, b.senhaAdmin);
+    const alvo = d.USERS.find((u) => u.id === Number(id));
+    if (!alvo) throw new ErroDemo(404, "Usuário não encontrado.");
+    if (alvo.id === admin.id) throw new ErroDemo(400, 'Para trocar a sua própria senha, use "Alterar senha" no menu.');
+    aplicarRedefinicaoSenha(alvo, b.senhaProvisoria, (s) => ({ senhaDemo: novaSenhaDemo(s) }));
+    auditar(d, admin, "senha_redefinida", { registroId: alvo.id });
+    return { usuario: usuarioPublico(alvo, { completo: true }) };
+  },
+
+  "POST /api/pacientes/:pid/acesso-temporario": (d, b, { pid }) => {
+    const admin = exigirSessao(d);
+    exigirTecnico(admin);
+    reautenticar(admin, b.senhaAdmin);
+    const { usuario, novo, senhaGerada } = gerarAcessoTemporario(d, pid, {
+      adminId: admin.id,
+      senha: (s) => ({ senhaDemo: novaSenhaDemo(s) }),
+    });
+    auditar(d, admin, "acesso_temporario_gerado", {
+      registroId: usuario.id,
+      pacienteId: usuario.id,
+      complemento: `${novo ? "novo" : "renovado"}, válido até ${usuario.acessoExpiraEm.slice(0, 10)}`,
+    });
+    return {
+      usuario: usuarioPublico(usuario, { completo: true }),
+      login: usuario.login,
+      senha: senhaGerada,
+      expiraEm: usuario.acessoExpiraEm,
+      validadeDias: ACESSO_PORTAL.validadeDias,
+      validadeDefinida: ACESSO_PORTAL.definido,
+    };
   },
 
   "POST /api/usuarios/:id/desbloquear": (d, _b, { id }) => {
@@ -305,14 +422,85 @@ const rotas = {
   "GET /api/audit": (d, _b, _p, q) => {
     const user = exigirSessao(d);
     exigirTecnico(user);
+    const { pagina, porPagina, ...filtros } = q;
     const verificacao = verificarTrilha(d.AUDITORIA);
-    const entradas = filtrarTrilha(d.AUDITORIA, q);
-    auditar(d, user, "consulta_auditoria", { complemento: new URLSearchParams(q).toString() || "sem filtros" });
-    return { total: entradas.length, entradas: entradas.slice(0, 1000), verificacao, eventos: EVENTOS };
+    const entradas = filtrarTrilha(d.AUDITORIA, filtros);
+    if (!pagina || pagina === "1") auditar(d, user, "consulta_auditoria", { complemento: new URLSearchParams(filtros).toString() || "sem filtros" });
+    const tam = Math.min(Math.max(Number(porPagina) || 50, 10), 500);
+    const paginas = Math.max(1, Math.ceil(entradas.length / tam));
+    const atual = Math.min(Math.max(Number(pagina) || 1, 1), paginas);
+    return {
+      total: entradas.length,
+      pagina: atual,
+      paginas,
+      porPagina: tam,
+      entradas: entradas.slice((atual - 1) * tam, atual * tam),
+      verificacao,
+      eventos: EVENTOS,
+    };
   },
 
   "GET /api/institucional": (d) => institucional(d),
 };
+
+const CATEGORIAS_ANEXO = ["outro", "termo", "diagnostico_externo", "material_teste"];
+
+/**
+ * Envio de arquivo (no servidor real: POST /api/pacientes/:pid/documentos).
+ * Recebe os bytes direto, sem passar por base64.
+ */
+export async function enviarDocumentoDemo(pid, meta = {}, { nome, bytes }) {
+  const d = await db();
+  const user = exigirSessao(d);
+  const pacienteId = Number(pid);
+  if (!pacientesPermitidos(user, d).includes(pacienteId)) throw new ErroDemo(403, "Sem permissão para este paciente.");
+  const v = validarArquivo({ nome, bytes });
+  if (!v.ok) throw new ErroDemo(400, v.erro);
+  const categoria = CATEGORIAS_ANEXO.includes(meta.categoria) ? meta.categoria : "outro";
+  const documento = {
+    id: novoId("d"),
+    nome: v.nome,
+    tipo: v.tipo,
+    categoria,
+    compartimento: categoria === "material_teste" ? "restrito" : "prontuario",
+    data: new Date().toISOString().slice(0, 10),
+  };
+  if (String(meta.titulo || "").trim()) documento.titulo = String(meta.titulo).trim().slice(0, 200);
+  if (categoria === "diagnostico_externo") {
+    const o = meta.origem || {};
+    if (!String(o.profissional || "").trim() || !String(o.crp || "").trim())
+      throw new ErroDemo(400, "Informe o profissional e o registro de quem emitiu o diagnóstico.");
+    documento.titulo ||= "Diagnóstico de outro profissional";
+    documento.origem = Object.fromEntries(["profissional", "crp", "instituicao", "emitidoEm"].map((k) => [k, String(o[k] || "").trim().slice(0, 200)]));
+    documento.resumo = String(meta.resumo || "").slice(0, 2000);
+  }
+  const r = aplicarAlteracoes(d, user, { DOCUMENTOS: { [pacienteId]: [documento] } }, { prazoRespostaTitularDias: PRIVACIDADE.prazoRespostaTitularDias });
+  if (!r.ok) throw new ErroDemo(403, r.erro);
+  const salvo = r.db.DOCUMENTOS[pacienteId].find((x) => x.id === documento.id);
+  const arquivoId = novoId("a");
+  await guardarArquivoDemo(arquivoId, bytes);
+  salvo.arquivo = { id: arquivoId, nome: v.nome, mime: v.mime, tamanho: v.tamanho, sha256: await sha256Bytes(bytes), enviadoEm: new Date().toISOString() };
+  for (const ev of r.eventos) auditar(r.db, user, ev.tipo, ev);
+  Object.keys(d).forEach((k) => delete d[k]);
+  Object.assign(d, r.db);
+  salvar();
+  return copia({ documento: salvo, data: escopo(user, d) });
+}
+
+/** Download (no servidor real: GET /api/pacientes/:pid/documentos/:docId/arquivo). */
+export async function baixarArquivoDemo(pid, docId) {
+  const d = await db();
+  const user = exigirSessao(d);
+  const doc = (escopo(user, d).DOCUMENTOS[Number(pid)] || []).find((x) => String(x.id) === String(docId));
+  if (!doc) throw new ErroDemo(404, "Documento não encontrado.");
+  if (!doc.arquivo) throw new ErroDemo(404, "Este registro não tem arquivo digital anexado.");
+  const bytes = await lerArquivoDemo(doc.arquivo.id);
+  if (!bytes) throw new ErroDemo(410, "O arquivo não está mais guardado neste navegador.");
+  if ((await sha256Bytes(bytes)) !== doc.arquivo.sha256) throw new ErroDemo(500, "O arquivo não confere com o registrado no prontuário (integridade).");
+  auditar(d, user, "arquivo_baixado", { pacienteId: Number(pid), registroId: doc.id });
+  salvar();
+  return { bytes, nome: doc.arquivo.nome, mime: doc.arquivo.mime };
+}
 
 /** Exportação CSV da trilha (no servidor real é um download por URL). */
 export async function csvAuditoriaDemo(filtros = {}) {
@@ -344,6 +532,9 @@ export async function atenderDemo(caminho, metodo = "GET", corpo) {
     try {
       const resp = fn(d, copia(corpo || {}), params, q);
       return copia(resp);
+    } catch (e) {
+      if (e instanceof ErroUsuario) throw new ErroDemo(e.status, e.message);
+      throw e;
     } finally {
       salvar();
     }

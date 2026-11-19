@@ -47,6 +47,7 @@ Nenhum problema P0 foi encontrado. Não há uso de `eval()`/`new Function()`, n�
 - **Causa:** `Math.floor(Math.random() * 900 + 50) + " KB"` — um dado de demonstração não deveria ser aleatório a cada chamada.
 - **Impacto:** nenhum funcional direto, mas é uma prática ruim para dados mock (viola a orientação explícita de que metadado simulado deve ser determinístico).
 - **Status:** **Corrigido.** `documentRepository.js` agora deriva um tamanho determinístico a partir do nome do arquivo (hash simples), sempre igual para o mesmo nome.
+- **Atualização (novembro de 2026):** o envio deixou de ser simulado. O arquivo real vai para o servidor (`POST /api/pacientes/:pid/documentos`), que confere o tipo pelo conteúdo, grava cifrado e carimba o tamanho real e o SHA-256 em `arquivo`. O tamanho derivado do nome e o toast "Download simulado" foram removidos, assim como o campo `tamanho` inventado dos documentos do seed, que agora aparecem como "sem arquivo digital".
 
 ---
 
@@ -66,7 +67,8 @@ Nenhum problema P0 foi encontrado. Não há uso de `eval()`/`new Function()`, n�
 - **Arquivo:** `assets/js/pages/pacientes.js`
 - **Causa:** `["tecnico","supervisor","estudante","paciente"].includes(currentUser.papel)` controla a exibição dos botões Editar/Cancelar/Faltou na aba de agenda do prontuário — incluir "paciente" nessa lista permitiria (na aparência da UI) que o próprio paciente cancelasse ou reportasse falta em seu atendimento.
 - **Impacto:** na prática **inatingível pela navegação normal**: a tela do paciente usa `renderMeuProntuario()` (bem mais simples, sem abas), que nunca chama `openProntuario()`. Só seria explorável se um paciente chamasse `window.openProntuario(seuPropriId)` manualmente pelo console — e mesmo assim só afeta o próprio caso do paciente, não o de terceiros.
-- **Status:** **Documentado, comportamento preservado.** Centralizado como `can("appointment.manage")` com o comentário explicando o motivo. Não foi alterado porque mudar comportamento exigiria confirmação de que isso não é intencional — recomendação registrada em [PERMISSIONS_MATRIX.md](./PERMISSIONS_MATRIX.md) para restringir a `STAFF_ROLES` quando o time validar.
+- **Status original:** **Documentado, comportamento preservado.** Centralizado como `can("appointment.manage")` com o comentário explicando o motivo. Não foi alterado porque mudar comportamento exigiria confirmação de que isso não é intencional.
+- **Status atual (novembro de 2026):** **Resolvido.** O responsável pelo projeto decidiu que só o técnico cria, remarca e cancela atendimentos (`appointment.create`, `appointment.update`, `appointment.cancel` e `appointment.manage` passaram a ser só do técnico). Supervisor e estudante do caso só marcam falta (`appointment.registerAbsence`); justificar é do técnico ou do supervisor. O paciente não agenda nem pede pelo sistema (`appointment.request` não é concedido a ninguém): pede agendamento, remarcação ou cancelamento presencialmente, por telefone ou e-mail, e o técnico registra o pedido com o canal. A regra também é aplicada no servidor (`mesclarAgendamentos`, `mesclarFaltas` e `mesclarSolicitacoesAgendamento` em `shared/politica.js`). Ver [PERMISSIONS_MATRIX.md](./PERMISSIONS_MATRIX.md).
 
 ### 7b. Comentário indica uma checagem de anamnese que nunca chegou a ser usada
 - **Arquivo:** `assets/js/pages/notificacoes.js` (`getNotificacoesAtivas`)
@@ -79,6 +81,7 @@ Nenhum problema P0 foi encontrado. Não há uso de `eval()`/`new Function()`, n�
 - **Causa:** `logAudit()` já termina com `saveData()` internamente; várias funções chamavam `logAudit(...)` e, na linha seguinte, `saveData()` de novo.
 - **Impacto:** nenhum funcional (idempotente), apenas uma escrita a mais em `localStorage` por operação — no volume atual (mock, poucos KBs), irrelevante; documentado para não ser reintroduzido em código novo.
 - **Status:** **Aceito.** Não removido nos pontos pré-existentes para manter o diff desta refatoração focado; qualquer novo código de repositório (`repositories/*.js`) já não tem essa duplicação.
+- **Atualização:** deixou de existir com o servidor. A trilha é gravada pelo servidor e `logAudit()` só informa eventos de leitura (`POST /api/audit/evento`), sem chamar `saveData()`.
 
 ### 9. `CORES` array de 7 entradas idênticas em `salvarNovoPaciente`
 - **Arquivo:** `assets/js/modals/modals.js`
@@ -100,7 +103,7 @@ Nenhum problema P0 foi encontrado. Não há uso de `eval()`/`new Function()`, n�
 - **Causa:** o sistema é renderizado via *template strings* concatenando HTML, e cada botão precisa de um disparador de ação; a solução mais direta nesse padrão é `onclick="fn(...)"` embutido na string.
 - **Impacto real:** nenhuma vulnerabilidade de XSS adicional (os argumentos embutidos são sempre IDs numéricos internos ou texto que já passou por `escapeHTML()`), mas é uma prática desalinhada com CSP estritas e dificulta uma futura migração para um framework baseado em componentes.
 - **Decisão de escopo:** **Não removido nesta etapa** para o HTML gerado dinamicamente. Ver justificativa detalhada em [ARCHITECTURE_TARGET.md](./ARCHITECTURE_TARGET.md#por-que-não-removemos-todo-onclick-inline-agora) — remover exigiria reescrever a função de renderização de **todas** as telas (praticamente 100% do HTML do sistema) para usar delegação de eventos com `data-action`/`data-id`, uma mudança de altíssimo raio de impacto para um sistema que ainda não tem cobertura de testes end-to-end. Feito **apenas** para os handlers estáticos de `index.html` (login, menu, logout, busca, modal), que são de baixo risco por não serem regenerados a cada render. Ver item 13.
-- **Status:** **Parcialmente corrigido + documentado.** Plano completo de remoção incremental em [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md) e [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md).
+- **Status:** **Parcialmente corrigido + documentado.** Plano de remoção incremental em [ARCHITECTURE_TARGET.md](./ARCHITECTURE_TARGET.md) e [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md) (o [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md) passou a tratar só da migração do banco).
 
 ### 13. `window.__PEP_BOOTED__` e ~40 funções expostas globalmente em `window`
 - **Arquivo:** `assets/js/main.js`

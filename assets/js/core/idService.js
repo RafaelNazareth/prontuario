@@ -10,7 +10,7 @@
 //   o que é uma estratégia frágil: duas chamadas na mesma
 //   millisegundo colidem, e não há garantia de unicidade.
 //   Centralizar aqui permite trocar a estratégia em um único
-//   lugar (ex.: ao integrar com o backend Java).
+//   lugar (ex.: ao migrar todas as coleções para o MongoDB).
 //
 // IMPORTANTE — ESCOPO DESTA MUDANÇA:
 //   Os IDs numéricos sequenciais dos dados semeados (USERS,

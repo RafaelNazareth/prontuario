@@ -1,12 +1,14 @@
 // ============================================================
-// Módulo gerado automaticamente pela modularização do PEP
-// Sistema de Prontuário Eletrônico Psicológico — FCMSCSP
+// pages/agenda.js — agenda semanal e próximos atendimentos.
+// Só o técnico responsável cria, altera e cancela atendimentos e
+// responde os pedidos dos pacientes (modals/agendamentos.js).
 // ============================================================
 
 import { currentUser, navigate } from "../core/auth.js";
 import { AGENDAMENTOS, PACIENTES, USERS, badgeAgendamento, escapeHTML, getPacientesPermitidos } from "../core/store.js";
 import { can } from "../core/permissions.js";
 import { formatBR, formatLong, weekdayAbbrev } from "../core/dateService.js";
+import { htmlPedidosAgendamento } from "../modals/agendamentos.js";
 
 export function _renderProximosList(proximos, hoje) {
   if (proximos.length === 0)
@@ -19,7 +21,7 @@ export function _renderProximosList(proximos, hoje) {
       const dataCell = isHj
         ? '<span class="today-mark">Hoje</span>'
         : `${weekdayAbbrev(ag.data)}, ${formatBR(ag.data)}`;
-      const acoesCell = !isCanceled
+      const acoesCell = !isCanceled && ag.status === "confirmado" && can("appointment.update")
         ? `<div class="action-btns" style="justify-content:flex-end">
              <button class="btn btn-ghost btn-sm btn-icon" onclick="openModalEditarAgendamento(${ag.id})" title="Editar" aria-label="Editar agendamento"><i class="bi bi-pencil"></i></button>
              <button class="btn btn-ghost btn-sm btn-icon" onclick="confirmarCancelamentoAgendamento(${ag.id})" title="Cancelar" aria-label="Cancelar agendamento"><i class="bi bi-x-lg"></i></button>
@@ -139,7 +141,7 @@ export function renderAgenda() {
       : isFaltou
         ? "Faltou"
         : escapeHTML(ev.ag.local) + (estNome ? " · " + escapeHTML(estNome) : "");
-    const acoes = !isCan && !isFaltou
+    const acoes = !isCan && !isFaltou && can("appointment.update")
       ? '<div class="agenda-ev-actions">' +
           '<button class="agenda-ev-btn" onclick="openModalEditarAgendamento(' + ev.ag.id + ')" title="Editar" aria-label="Editar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-pencil"></i></button>' +
           '<button class="agenda-ev-btn agenda-ev-btn-cancel" onclick="confirmarCancelamentoAgendamento(' + ev.ag.id + ')" title="Cancelar" aria-label="Cancelar agendamento de ' + escapeHTML(ev.pac.nome) + '"><i class="bi bi-x-lg"></i></button>' +
@@ -196,6 +198,7 @@ export function renderAgenda() {
       ? '<button class="btn btn-primary" onclick="openModalNovoAgendamento()"><i class="bi bi-plus-lg"></i> Novo agendamento</button>'
       : "") +
     "</div>" +
+    htmlPedidosAgendamento() +
     '<section class="card">' +
     '<div class="card-header agenda-toolbar">' +
     '<span class="agenda-range">' + semLabel + "</span>" +

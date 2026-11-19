@@ -21,9 +21,9 @@
 // pode alterar `currentUser.papel` em memória e contornar estas
 // checagens. A autorização que realmente importa (impedir que um
 // estudante leia o prontuário de um paciente que não é seu, por
-// exemplo) só existe de fato quando o backend Java validar cada
-// requisição no servidor, de forma independente do que o frontend
-// envia. Ver docs/BACKEND_CONTRACT.md.
+// exemplo) é feita pelo servidor Node (assets/js/shared/politica.js,
+// usado por server/index.mjs), que confere cada leitura e gravação
+// independentemente do que o navegador envia. Ver docs/BACKEND_CONTRACT.md.
 // ============================================================
 
 import { currentUser } from "./auth.js";
@@ -63,14 +63,32 @@ export function can(action, resource) {
       return getPacientesPermitidos().some((p) => p.id === resource.id);
 
     // Equipe clínica (não paciente) pode registrar evolução, finalizar
-    // anamnese, subir documento e criar agendamento.
+    // anamnese e anexar documento.
     case "evolution.create":
     case "anamnese.update":
     case "document.create":
+      return STAFF_ROLES.includes(role);
+
+    // Agenda: só o técnico responsável cria, altera e cancela atendimentos
+    // e responde os pedidos de agendamento dos pacientes.
     case "appointment.create":
     case "appointment.update":
     case "appointment.cancel":
+    case "appointment.manage":
+    case "appointment.respondRequest":
+      return role === UserRole.TECNICO;
+
+    // A equipe do caso registra que o paciente faltou; justificar a falta
+    // fica com o técnico ou o supervisor.
+    case "appointment.registerAbsence":
       return STAFF_ROLES.includes(role);
+    case "appointment.justifyAbsence":
+      return role === UserRole.TECNICO || role === UserRole.SUPERVISOR;
+
+    // O paciente não agenda nem pede nada pelo sistema: o acesso dele é
+    // só de consulta. Pedidos chegam presencialmente, por telefone ou e-mail.
+    case "appointment.request":
+      return false;
 
     // Qualquer papel autenticado pode consultar sua própria agenda.
     // Co-assinatura de registros de estagiários (Res. CFP 001/2009, art. 3º):
@@ -92,27 +110,15 @@ export function can(action, resource) {
     case "consent.manage":
       return STAFF_ROLES.includes(role);
 
-    // Solicitações do titular (LGPD art. 18): o próprio paciente pede;
-    // o técnico registra pedidos recebidos por outros canais e responde.
+    // Solicitações do titular (LGPD art. 18): o titular pede
+    // presencialmente, por telefone ou e-mail; o técnico registra e responde.
     case "titular.request":
-      return role === UserRole.PACIENTE || role === UserRole.TECNICO;
+      return role === UserRole.TECNICO;
     case "titular.respond":
       return role === UserRole.TECNICO;
 
     case "appointment.read":
       return true;
-
-    // ⚠️ Preserva um comportamento pré-existente do frontend original:
-    // a aba de agenda do prontuário também mostrava os botões de
-    // editar/cancelar/registrar falta para o papel "paciente". Isso é
-    // inconsistente com o resto da tela (o paciente não deveria poder
-    // cancelar o próprio atendimento) mas, na prática, é inatingível
-    // pela navegação normal — a UI do paciente usa renderMeuProntuario(),
-    // que nunca chama openProntuario(). Mantido como estava para não
-    // mudar comportamento sem necessidade; documentado como achado em
-    // docs/FRONTEND_AUDIT.md (ação recomendada: restringir a STAFF_ROLES).
-    case "appointment.manage":
-      return [...STAFF_ROLES, UserRole.PACIENTE].includes(role);
 
     default:
       return false;

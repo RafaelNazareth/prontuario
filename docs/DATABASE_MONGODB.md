@@ -1,250 +1,76 @@
-# Modelagem MongoDB — PEP (FCMSCSP)
+# Banco MongoDB — PEP (FCMSCSP)
 
-Especificação das coleções para o futuro backend Java + MongoDB. **Nada aqui está implementado.** Modelado a partir de [DOMAIN_MODEL.md](./DOMAIN_MODEL.md), pensando em MongoDB especificamente — não é uma cópia de um modelo relacional.
+O servidor Node do PEP grava em um de dois bancos, escolhidos pela variável `PEP_BANCO` (`server/banco/index.mjs`):
 
-## Princípio de decisão: embedding vs. referencing
+- `json` (padrão): `data/db.json` + `data/arquivos/*.bin` (`server/banco/json.mjs`).
+- `mongodb`: MongoDB (`server/banco/mongodb.mjs`), com `PEP_MONGODB_URI` e `PEP_MONGODB_BANCO` (padrão `pep`).
 
-Regra usada em cada decisão abaixo:
-- **Embeber** quando o sub-documento (a) só é lido sempre junto do documento pai, (b) tem um limite natural de tamanho, e (c) não precisa ser consultado/filtrado independentemente do pai.
-- **Referenciar** quando a coleção (a) cresce sem limite (evoluções ao longo dos anos, documentos), (b) precisa ser paginada/filtrada independentemente do pai, ou (c) é compartilhada entre múltiplos "pais" (um `User` é referenciado por muitos `Patient`).
+Os dois têm a mesma interface (`ler`, `gravar`, `restaurarSeed`, `fechar`, `arquivos.salvar`, `arquivos.ler`), então o restante do servidor não sabe qual está em uso. O driver oficial (`mongodb` ^6) está em `optionalDependencies` e só é carregado quando `PEP_BANCO=mongodb`. Como configurar e migrar: [IMPLANTACAO.md](./IMPLANTACAO.md) e [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md).
 
----
+> **Situação:** o adaptador está implementado e coberto por testes automatizados (com um banco simulado em memória, em `tests/mongodb.test.mjs`). Nenhum ambiente de produção foi migrado ainda.
 
-## Collection: `users`
+## Como o servidor usa o banco
 
-**Objetivo:** contas de acesso (staff e pacientes).
+1. A cada requisição, o servidor lê o conjunto de dados inteiro (`ler()`), aplica as regras de `shared/politica.js` e chama `gravar()`.
+2. `gravar()` compara cada documento com o que foi lido por último e envia **só os documentos que mudaram** (`bulkWrite` com `replaceOne`/`upsert`; documentos que sumiram do conjunto recebem `deleteOne`, mas as regras do servidor nunca removem registros do prontuário).
+3. Com replica set (padrão no MongoDB Atlas), as gravações de uma requisição vão numa **transação**. Em servidor standalone, sem transações, grava sem elas. `PEP_MONGODB_TRANSACOES=0` desliga as transações.
+4. As requisições à API são atendidas em fila pelo servidor. Por isso, **uma única instância do servidor por banco**.
+5. Banco vazio (sem usuários) começa com `data/seed.json`, como o banco JSON.
 
-| Campo | Tipo | Obrigatório | Nullable | Default |
-|---|---|---|---|---|
-| `_id` | ObjectId | sim | não | gerado |
-| `login` | string | sim | não | — |
-| `passwordHash` | string | sim | não | — (nunca texto puro — ver [SECURITY_BACKEND_REQUIREMENTS.md](./SECURITY_BACKEND_REQUIREMENTS.md)) |
-| `nome` | string | sim | não | — |
-| `papel` | string (enum) | sim | não | — |
-| `avatar` | string | sim | não | derivado do nome |
-| `color` | string | sim | não | — |
-| `ativo` | bool | sim | não | `true` |
-| `createdAt` / `updatedAt` | date | sim | não | — |
+**Limitação honesta:** ler o conjunto inteiro a cada requisição é o mesmo modelo do banco JSON. Serve para o volume de um serviço-escola, mas não aproveita as consultas do MongoDB. Ler só o necessário por consulta (e paginar no servidor) é um passo futuro; ver [FUTURE_IMPROVEMENTS.md](./FUTURE_IMPROVEMENTS.md), item 15.
 
-**Índices:** `{ login: 1 }` único. `{ papel: 1 }` (listagens filtradas por papel — ex.: "todos os estudantes" na tela de novo paciente).
+## Coleções
 
-**Crescimento:** baixo (dezenas a poucas centenas de documentos mesmo em escala grande — usuários são staff + pacientes, não eventos).
+Um documento por registro, nunca um documento gigante com tudo.
 
-**Evolução de schema:** campo `schemaVersion` não necessário aqui — schema simples e estável.
-
----
-
-## Collection: `patients`
-
-**Objetivo:** cadastro do paciente/caso clínico.
-
-| Campo | Tipo | Obrigatório | Nullable | Default |
-|---|---|---|---|---|
-| `_id` | ObjectId | sim | não | gerado |
-| `nome` | string | sim | não | — |
-| `cpf` | string | sim | não | — (normalizado, só dígitos) |
-| `nascimento` | date | não | sim | `null` |
-| `telefone` | string | não | sim | `null` |
-| `email` | string | não | sim | `null` |
-| `estudanteIds` | ObjectId[] (ref `users`) | não | — | `[]` (0 a 3) |
-| `supervisorId` | ObjectId (ref `users`) | sim | não | — |
-| `status` | string (enum: `ativo`\|`inativo`) | sim | não | `ativo` |
-| `cor` | string | sim | não | `#1b5e20` |
-| `createdAt` / `updatedAt` | date | sim | não | — |
-
-**Referenciar** `estudanteIds`/`supervisorId` (não embeber os dados do usuário): um mesmo estudante/supervisor está ligado a múltiplos pacientes — embeber duplicaria nome/avatar em dezenas de documentos e exigiria atualização em massa se o nome de um usuário mudasse. O backend resolve os nomes com um `$lookup` (ou uma consulta separada) ao montar `PatientListItemDTO`.
-
-**Índices:** `{ cpf: 1 }` único. `{ supervisorId: 1 }` (RBAC de supervisor). `{ estudanteIds: 1 }` (RBAC de estudante — índice multikey). `{ status: 1 }` (filtro de listagem).
-
-**Crescimento:** moderado — na escala citada no plano (10.000+ pacientes), ainda é uma coleção pequena para MongoDB (documentos pequenos, sem sub-arrays ilimitados). Não há risco de documento gigante aqui.
-
----
-
-## Collection: `anamneses`
-
-**Objetivo:** anamnese — no máximo uma por paciente.
-
-**Decisão: coleção própria, referenciando `patients`, e não embutida em `patients`.** Embeber pareceria natural (relação 1:1), mas:
-1. Anamnese tem seu próprio ciclo de vida e regra de imutabilidade (`finalizada`) que é mais simples de proteger com uma operação atômica dedicada (`findOneAndUpdate` com filtro `status: { $ne: "finalizada" }`) do que manipulando um sub-documento dentro de `patients`.
-2. Mantém `patients` enxuto para as consultas de listagem (que rodam com muito mais frequência que a leitura de anamnese).
-
-| Campo | Tipo | Obrigatório |
+| Coleção | Conteúdo (chave no conjunto de dados) | `_id` |
 |---|---|---|
-| `_id` | ObjectId | sim |
-| `patientId` | ObjectId (ref `patients`) | sim |
-| `queixa` | string | sim |
-| `historia`, `historicoMedico`, `medicamentos`, `contexto`, `hipoteses` | string | não |
-| `status` | string (enum: `rascunho`\|`finalizada`) | sim |
-| `criadoPor` | ObjectId (ref `users`) | sim |
-| `createdAt` / `updatedAt` | date | sim |
+| `usuarios` | `USERS` | id do usuário (texto) |
+| `pacientes` | `PACIENTES` | id do paciente |
+| `anamneses` | `ANAMNESES` (uma por paciente) | id do paciente; também `pacienteRef` |
+| `evolucoes` | `EVOLUCOES` | `<pacienteId>:<id>`; com `pacienteRef` e `_ordem` |
+| `documentos` | `DOCUMENTOS` (metadados, inclusive `arquivo`) | `<pacienteId>:<id>`; com `pacienteRef` e `_ordem` |
+| `registro_documental` | `REGISTRO_DOCUMENTAL` | `<pacienteId>:<id>`; com `pacienteRef` e `_ordem` |
+| `compartilhamentos` | `COMPARTILHAMENTOS` | `<pacienteId>:<id>`; com `pacienteRef` e `_ordem` |
+| `agendamentos` | `AGENDAMENTOS` | id do agendamento; com `_ordem` |
+| `faltas` | `FALTAS` | id da falta; com `_ordem` |
+| `notificacoes` | `NOTIFICACOES` | id; com `_ordem` |
+| `solicitacoes_titular` | `ACESSO_PACIENTE` | id; com `_ordem` |
+| `solicitacoes_agendamento` | `SOLICITACOES_AGENDAMENTO` | id; com `_ordem` |
+| `auditoria` | `AUDITORIA` | id do registro (`aud_000123`); ordenada por `seq` |
+| `arquivos` | conteúdo dos arquivos anexados, **já cifrado** (AES-256-GCM) | `a_<uuid>` (o `arquivo.id` do documento) |
 
-**Índices:** `{ patientId: 1 }` único (garante no máximo 1 por paciente a nível de banco, não só de aplicação).
+- `pacienteRef` liga os registros clínicos ao paciente; `_ordem` guarda a ordem da lista original. Os dois são campos internos: são retirados na leitura e não aparecem na API.
+- Os campos de cada registro são os do [DOMAIN_MODEL.md](./DOMAIN_MODEL.md), sem tradução nem renomeação. A conversão está em `paraDocumentos()` e `deDocumentos()` e é testada ida e volta, sem perda, para todas as coleções.
+- **Arquivos anexados ficam no próprio MongoDB**, na coleção `arquivos`: `{ _id, conteudo (binário cifrado), tamanhoCifrado, criadoEm }`. Como o limite é de 10 MB por arquivo, cabem no limite de 16 MB por documento sem GridFS. O conteúdo é cifrado pelo servidor antes de chegar ao banco; quem lê a coleção sem `PEP_ARQUIVOS_KEY` não abre os arquivos. Um arquivo nunca é sobrescrito (`insertOne`).
 
-**Crescimento:** 1 documento por paciente — trivial.
+## Índices
 
----
+Criados (se não existirem) toda vez que o servidor inicia:
 
-## Collection: `evolutions`
-
-**Objetivo:** registros de sessão, append-only, por paciente.
-
-**Decisão: coleção própria, referenciando `patients` — nunca embutida.** Cresce sem limite ao longo dos anos de acompanhamento (múltiplas sessões por semana, por vários anos, multiplicado por milhares de pacientes). Embeber um array ilimitado dentro de `patients` violaria o limite de 16MB por documento do MongoDB e degradaria toda leitura de `patients` (que precisaria carregar/ignorar um array potencialmente enorme).
-
-| Campo | Tipo | Obrigatório |
+| Coleção | Índice | Para quê |
 |---|---|---|
-| `_id` | ObjectId | sim |
-| `patientId` | ObjectId (ref `patients`) | sim |
-| `num` | int | sim |
-| `data` | date | sim |
-| `autorId` | ObjectId (ref `users`) | sim |
-| `papel` | string | sim |
-| `tipo` | string (enum: `atendimento`\|`supervisao`) | sim |
-| `conteudo` | string | sim |
-| `tags` | string[] | não |
-| `createdAt` | date | sim (não há `updatedAt` — imutável por regra de negócio) |
+| `usuarios` | `{ login: 1 }` único | Login único também no banco |
+| `pacientes` | `{ supervisorId: 1 }` | Casos de um supervisor |
+| `pacientes` | `{ estudantesIds: 1 }` | Casos de um estudante (multikey) |
+| `agendamentos` | `{ pacienteId: 1, data: 1 }` | Agenda do paciente e conflito de horário |
+| `agendamentos` | `{ estudanteId: 1, data: 1 }` | Agenda do estagiário e conflito de horário |
+| `evolucoes`, `documentos`, `registro_documental`, `compartilhamentos` | `{ pacienteRef: 1, _ordem: 1 }` | Registros de um paciente, em ordem |
+| `auditoria` | `{ seq: -1 }` único | Ordem da trilha e sequência sem repetição |
+| `auditoria` | `{ pacienteId: 1, ts: -1 }` | Trilha de um paciente |
+| `solicitacoes_agendamento` | `{ pacienteId: 1, status: 1 }` | Pedidos pendentes de um paciente |
 
-**Índices:** `{ patientId: 1, num: 1 }` composto (paginação ordenada por paciente — o padrão de acesso mais comum). `{ patientId: 1, data: -1 }` (para "últimas evoluções").
+Hoje o servidor lê as coleções inteiras, então a maioria desses índices ainda não é usada nas leituras; eles já estão prontos para a leitura por consulta.
 
-**Crescimento:** **a coleção de maior volume do sistema** (o plano cita 100.000+ evoluções). Projetada desde o início como coleção própria e paginada por esse motivo. Considerar *sharding* por `patientId` se o volume ultrapassar a capacidade de um único nó — decisão de infraestrutura para quando o volume real justificar, não implementar preventivamente.
+## Decisões de modelagem
 
----
+- **Registros clínicos em coleções próprias, ligados ao paciente** (não embutidos em `pacientes`): evoluções, documentos e agenda crescem sem limite ao longo dos anos. Embutir faria o documento do paciente crescer até o limite de 16 MB e pesaria em toda leitura do cadastro.
+- **Avaliação de demanda em coleção própria**, uma por paciente (`_id` = id do paciente): a regra de imutabilidade fica isolada e o cadastro do paciente continua enxuto.
+- **Usuários referenciados por id** (`supervisorId`, `estudantesIds`, `autorId`): o mesmo usuário aparece em muitos casos. O nome do autor é guardado também no registro (`autor`), de propósito: o prontuário mostra quem assinou na época, mesmo que o nome mude depois.
+- **Trilha de auditoria sem TTL e sem coleção *capped*:** ela faz parte da guarda de 20 anos e é encadeada por hash; apagar os registros mais antigos quebraria a verificação.
+- **Arquivos no MongoDB, não em object storage externo:** com o limite de 10 MB e o volume de um serviço-escola, a coleção `arquivos` mantém tudo num lugar só, no mesmo backup (`mongodump`) e sob a mesma cifragem do servidor. Se o volume crescer muito, a interface `arquivos.salvar/ler` permite trocar o armazenamento sem mexer no resto.
 
-## Collection: `appointments`
+## Backup
 
-**Objetivo:** agendamentos.
-
-| Campo | Tipo | Obrigatório |
-|---|---|---|
-| `_id` | ObjectId | sim |
-| `patientId` | ObjectId (ref `patients`) | sim |
-| `estudanteId` | ObjectId (ref `users`) | não |
-| `supervisorId` | ObjectId (ref `users`) | não |
-| `data` | date | sim |
-| `hora` | string ("HH:mm") | sim |
-| `local` | string | sim |
-| `modalidade` | string (enum) | sim |
-| `status` | string (enum) | sim |
-| `createdAt` / `updatedAt` | date | sim |
-
-**Referenciar**, não embeber em `patients` — mesma razão de `evolutions` (cresce sem limite; um paciente ativo por 2 anos, 1x/semana, já são ~100 agendamentos, multiplicado por milhares de pacientes).
-
-**Índices:** `{ patientId: 1, data: 1 }` (agenda de um paciente). `{ estudanteId: 1, data: 1 }` (agenda de um estudante — usada na visão semanal). `{ data: 1, status: 1 }` (relatórios/dashboard por período).
-
----
-
-## Collection: `absences`
-
-**Objetivo:** faltas.
-
-| Campo | Tipo | Obrigatório |
-|---|---|---|
-| `_id` | ObjectId | sim |
-| `appointmentId` | ObjectId (ref `appointments`) | sim |
-| `patientId` | ObjectId (ref `patients`) | sim |
-| `justificada` | bool | sim |
-| `registradoPorId` | ObjectId (ref `users`) | sim |
-| `createdAt` | date | sim |
-
-**Decisão: coleção própria** (não embutida em `appointments` nem em `patients`) porque a regra "contar faltas injustificadas do paciente" é uma consulta agregada (`count` filtrado) que é mais natural e performática como coleção própria com índice composto do que percorrendo sub-arrays.
-
-**Índices:** `{ patientId: 1, justificada: 1 }` (a consulta de "faltas injustificadas do paciente", que dispara a notificação de troca).
-
----
-
-## Collection: `documents`
-
-**Objetivo:** metadado de documentos anexados. **O binário do arquivo em si não deve ir para esta coleção nem para o MongoDB de forma geral** — ver seção própria abaixo.
-
-| Campo | Tipo | Obrigatório |
-|---|---|---|
-| `_id` | ObjectId | sim |
-| `patientId` | ObjectId (ref `patients`) | sim |
-| `nome` | string | sim |
-| `tipo` | string (enum) | sim |
-| `tamanhoBytes` | long | sim |
-| `storageKey` | string | sim | referência opaca ao objeto no armazenamento de binários (ver abaixo) |
-| `autorId` | ObjectId (ref `users`) | sim |
-| `createdAt` | date | sim |
-
-**Índices:** `{ patientId: 1, createdAt: -1 }`.
-
-### Sobre armazenamento de binários — MongoDB não é assumido como solução ideal
-
-O plano de refatoração pede explicitamente para não assumir MongoDB como padrão para todos os binários. Recomendação: usar um **object storage dedicado** (ex.: S3-compatível, ou Azure Blob, dependendo de onde o backend Java for hospedado) para o conteúdo real dos arquivos, guardando em `documents.storageKey` apenas a referência. Motivos:
-- MongoDB tem limite de 16MB por documento; arquivos maiores exigiriam GridFS, que adiciona complexidade operacional sem necessidade se um object storage já resolve o problema de forma mais barata e com CDN/URLs assinadas nativas.
-- Separar metadado (MongoDB, consultado com frequência) de binário (object storage, acessado sob demanda) é o padrão consolidado para esse tipo de carga.
-- **Decisão de infraestrutura a ser tomada pelo time de backend**, não fixada aqui como definitiva — esta seção documenta a recomendação e o porquê, não uma escolha de produto específica.
-
----
-
-## Collection: `access_requests`
-
-| Campo | Tipo | Obrigatório |
-|---|---|---|
-| `_id` | ObjectId | sim |
-| `patientId` | ObjectId (ref `patients`) | sim |
-| `status` | string (enum: `pendente`\|`liberado`) | sim |
-| `protocolo` | string | sim |
-| `solicitacao` | date | sim |
-| `liberacao` | date | não |
-
-**Índices:** `{ patientId: 1 }`. `{ protocolo: 1 }` único.
-
----
-
-## Collection: `audit_log`
-
-**Objetivo:** trilha de auditoria imutável. Ver [AUDIT_LOG_SPEC.md](./AUDIT_LOG_SPEC.md) para o vocabulário completo de ações.
-
-| Campo | Tipo | Obrigatório |
-|---|---|---|
-| `_id` | ObjectId | sim |
-| `actorId` | ObjectId (ref `users`) | sim |
-| `action` | string | sim |
-| `resource` | string | não |
-| `resourceId` | ObjectId | não |
-| `timestamp` | date | sim |
-| `ip` | string | não |
-| `userAgent` | string | não |
-| `metadata` | object | não |
-
-**Índices:** `{ timestamp: -1 }` (listagem cronológica). `{ actorId: 1, timestamp: -1 }`. `{ resource: 1, resourceId: 1 }` (histórico de um recurso específico, ex.: "tudo que aconteceu com o paciente X").
-
-**Índice TTL:** **não recomendado por padrão** — auditoria de prontuário clínico tipicamente tem exigência de retenção longa (anos), não expiração automática. Se houver uma política de retenção definida com jurídico/compliance (ver [SECURITY_BACKEND_REQUIREMENTS.md](./SECURITY_BACKEND_REQUIREMENTS.md), seção LGPD), implementar como job de arquivamento explícito, não TTL automático — evita perda de dado por configuração incorreta.
-
-**Crescimento:** cresce continuamente e nunca é apagado — candidato natural a coleção *capped* não é apropriado (capped descarta os mais antigos, o oposto do que se quer aqui). Monitorar tamanho e considerar arquivamento para *cold storage* após um período definido pela política de retenção, mantendo pesquisabilidade via um índice mínimo no arquivo frio.
-
----
-
-## Collection: `notifications`
-
-| Campo | Tipo | Obrigatório |
-|---|---|---|
-| `_id` | ObjectId | sim |
-| `tipo` | string (enum) | sim |
-| `patientId` | ObjectId | não |
-| `destinatarioIds` | ObjectId[] | sim |
-| `titulo` / `desc` | string | sim |
-| `tipoAcao` | string | não |
-| `lidaPor` | ObjectId[] | sim | `[]` — quem já leu, já que uma notificação pode ter múltiplos destinatários (ex.: troca de paciente notifica vários estudantes) |
-| `createdAt` | date | sim |
-
-**Índices:** `{ destinatarioIds: 1, createdAt: -1 }` (multikey — "minhas notificações recentes").
-
-**Índice TTL sugerido:** `{ createdAt: 1 }` com `expireAfterSeconds` de alguns meses **é aceitável aqui** (diferente de `audit_log`) — notificação é um artefato de UX transitório, não um registro legal.
-
----
-
-## Resumo de referencing vs. embedding
-
-| Relação | Decisão | Motivo principal |
-|---|---|---|
-| Patient → Anamnesis | Referência (coleção própria) | Regra de imutabilidade isolada; leitura de `patients` fica leve |
-| Patient → Evolutions | Referência | Cresce sem limite; maior volume do sistema |
-| Patient → Appointments | Referência | Cresce sem limite |
-| Appointment → Absence | Referência | Consulta agregada (contagem) independente |
-| Patient → Documents | Referência (+ storage externo para o binário) | Cresce sem limite; binário não cabe/não deve ir no MongoDB |
-| Patient → estudantes/supervisor | Referência a `users` | Usuário é compartilhado entre muitos pacientes |
-| Notification → destinatários | Referência (array de IDs) | Array pequeno e limitado (poucos destinatários por notificação) — não justificaria coleção própria |
-
-Nenhuma relação neste domínio foi modelada como embedding de um array potencialmente ilimitado — é exatamente o erro mais comum de "copiar modelagem SQL para o Mongo" que este documento evita deliberadamente.
+- O servidor continua gerando o backup cifrado do conjunto de dados em `data/backups/*.bkp`, também com MongoDB, e `npm run data:restaurar` restaura no banco em uso.
+- Os arquivos anexados **não** entram nesse backup com MongoDB (a cópia incremental para `data/backups/arquivos/` é só do banco JSON). Use `mongodump` ou o backup do provedor, que cobre todas as coleções, inclusive `arquivos`. Detalhes em [IMPLANTACAO.md](./IMPLANTACAO.md#9-backups).

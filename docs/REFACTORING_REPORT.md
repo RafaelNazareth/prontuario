@@ -138,7 +138,7 @@ Nenhum item P0 restante.
 
 ## 10. Backend
 
-**O que está preparado:** contrato completo de API (endpoints, DTOs, paginação, erros) em [BACKEND_CONTRACT.md](./BACKEND_CONTRACT.md) e [API_DTOS.md](./API_DTOS.md); guia de arquitetura Java (camadas, pacotes) em [JAVA_BACKEND_GUIDE.md](./JAVA_BACKEND_GUIDE.md); requisitos de segurança e LGPD (com aviso de que precisam de validação jurídica) em [SECURITY_BACKEND_REQUIREMENTS.md](./SECURITY_BACKEND_REQUIREMENTS.md); especificação de auditoria em [AUDIT_LOG_SPEC.md](./AUDIT_LOG_SPEC.md); e a camada de repositório no frontend já pronta para trocar de implementação (mock → API) sem tocar em nenhuma tela. **Nada do backend foi implementado** — é 100% especificação para a próxima etapa.
+**O que está preparado:** contrato completo de API (endpoints, DTOs, paginação, erros) em [BACKEND_CONTRACT.md](./BACKEND_CONTRACT.md) e [API_DTOS.md](./API_DTOS.md); guia de arquitetura Java (camadas, pacotes) em `JAVA_BACKEND_GUIDE.md` (removido em 2026-11 e substituído por [IMPLANTACAO.md](./IMPLANTACAO.md)); requisitos de segurança e LGPD (com aviso de que precisam de validação jurídica) em [SECURITY_BACKEND_REQUIREMENTS.md](./SECURITY_BACKEND_REQUIREMENTS.md); especificação de auditoria em [AUDIT_LOG_SPEC.md](./AUDIT_LOG_SPEC.md); e a camada de repositório no frontend já pronta para trocar de implementação (mock → API) sem tocar em nenhuma tela. **Nada do backend foi implementado** — é 100% especificação para a próxima etapa.
 
 ## 11. MongoDB
 
@@ -189,3 +189,18 @@ Próximo passo recomendado:
   Validar as duas decisões de comportamento pendentes com o time, depois iniciar testes E2E
   como pré-requisito para a remoção incremental de onclick inline.
 ```
+
+---
+
+## 2026-11 — Agenda, arquivos reais, usuários, paginação e MongoDB (versão 1.2.0)
+
+Rodada feita depois do servidor Node seguro. O relatório acima descreve a refatoração original e foi mantido como estava; algumas conclusões dele (backend Java, mock no navegador) já não valem.
+
+- **Agenda (decisão do responsável pelo projeto):** só o técnico cria, remarca e cancela atendimentos. Supervisor e estudante do caso só registram falta; justificar é do técnico ou do supervisor. O paciente pedia agendamento, remarcação ou cancelamento pelo portal (nova coleção `SOLICITACOES_AGENDAMENTO`; depois revisto, ver "Revisão posterior" abaixo), e o técnico atende ou recusa com motivo. Regras no servidor em `shared/politica.js` (conflito de horário do paciente ou do estagiário, estagiário do grupo, caso encerrado); tela em `modals/agendamentos.js`. Resolve o item 7 do [FRONTEND_AUDIT.md](./FRONTEND_AUDIT.md), uma das duas decisões pendentes acima.
+- **Upload e download reais:** PDF, PNG, JPEG e .docx até 10 MB, tipo detectado pelo conteúdo (`shared/arquivos.js`), gravados cifrados com AES-256-GCM (`server/cofreArquivos.mjs`), SHA-256 conferido a cada download e download auditado (`arquivo_baixado`). O tamanho simulado e o "download simulado" foram removidos. No modo demonstração, os arquivos ficam no IndexedDB.
+- **Gestão de usuários:** edição (nome, login, papel, CRP, matrícula), redefinição de senha pelo técnico (substitui o "esqueci minha senha") e acesso dos pacientes ao portal, com reautenticação e auditoria (`usuario_atualizado`, `senha_redefinida`). O técnico também troca o supervisor do caso. Regras em `shared/usuarios.js`.
+- **Paginação:** pacientes, equipe, acesso ao portal (na tela, `core/paginacao.js`) e auditoria (no servidor).
+- **Banco:** `server/banco/` com JSON (padrão) ou MongoDB (`PEP_BANCO=mongodb`), script `npm run data:migrar-mongodb` e restauração para os dois bancos. O servidor ainda lê o conjunto inteiro a cada requisição.
+- **Implantação:** dados institucionais em `data/instituicao.json`, `PEP_HOST`, Node 20+. `docs/JAVA_BACKEND_GUIDE.md` foi substituído por [IMPLANTACAO.md](./IMPLANTACAO.md), e os documentos que descreviam um futuro backend Java (contrato, DTOs, MongoDB, segurança, migração, arquitetura, auditoria) foram reescritos para o servidor Node atual.
+- **Revisão posterior do acesso do paciente:** o login do paciente passou a ser só de consulta (qualquer gravação dele é recusada) e temporário: quando o paciente pede o prontuário, o técnico imprime ou gera login `pac<caso>` e senha aleatória, válidos por `acessoPortal.validadeDias` em `data/instituicao.json` (7 dias provisórios até a instituição definir), com o evento `acesso_temporario_gerado`. Pedidos de agendamento e solicitações do titular deixaram de ser feitos pelo portal: o paciente pede presencialmente, por telefone ou e-mail, e o técnico registra com o `canal`. A equipe recebe qualquer senha inicial ou provisória (mínimo de 4 caracteres) e é obrigada a criar a própria no primeiro acesso, o que o servidor também garante (`403`, `motivo: "troca_senha"`).
+- **Fora do escopo, por decisão do responsável:** publicação para uso real, assinatura ICP-Brasil, MFA e migração da produção para banco de dados. Testes E2E continuam pendentes.

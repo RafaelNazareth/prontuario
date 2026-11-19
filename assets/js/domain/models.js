@@ -8,11 +8,9 @@
 // JSDoc dá boa parte do benefício de tipos — autocomplete e checagem
 // leve em editores — sem exigir build step nem mudar a stack.
 //
-// Estes typedefs descrevem a FORMA ATUAL dos dados no mock. Os campos
-// definitivos (nomes, tipos, obrigatoriedade) do contrato com o backend
-// Java estão em docs/API_DTOS.md e docs/DATABASE_MONGODB.md — não são
-// necessariamente idênticos a este arquivo, que documenta apenas o
-// estado presente do frontend.
+// Estes typedefs descrevem a forma dos dados que o navegador recebe do
+// servidor Node (GET /api/data). O contrato da API está em
+// docs/API_DTOS.md e o armazenamento no MongoDB em docs/DATABASE_MONGODB.md.
 // ============================================================
 
 /**
@@ -23,11 +21,11 @@
  * @typedef {Object} User
  * @property {number} id
  * @property {string} login
- * @property {string} pass          Texto puro no mock — nunca mantido em memória após login (ver sanitizarUsuario).
  * @property {string} nome
  * @property {UserRoleValue} papel
  * @property {string} avatar        Iniciais, ex.: "CM".
  * @property {string} color         Cor hex do avatar.
+ * @property {string} [acessoExpiraEm] Só paciente: fim do acesso temporário (ISO).
  */
 
 /**
@@ -89,11 +87,13 @@
  * @typedef {Object} DocumentMeta
  * @property {string} id
  * @property {string} nome
- * @property {"pdf"|"img"|"docx"} tipo
- * @property {string} tamanho    Metadado simulado — nunca inventado aleatoriamente sem necessidade (ver docs/FRONTEND_AUDIT.md).
+ * @property {"pdf"|"png"|"jpg"|"docx"|"img"} tipo   Tipo real, detectado pelo conteúdo (shared/arquivos.js).
+ * @property {{id:string, nome:string, mime:string, tamanho:number, sha256:string, enviadoEm:string}} [arquivo]
+ *           Arquivo digital anexado, gravado cifrado pelo servidor. Ausente em
+ *           registros antigos, feitos só com os dados do documento.
  * @property {string} data       "AAAA-MM-DD".
  * @property {string} autor
- * @property {"termo"|"diagnostico_externo"|"laudo"|"outro"} [categoria]
+ * @property {"termo"|"diagnostico_externo"|"material_teste"|"emitido"|"outro"} [categoria]
  * @property {string} [titulo]
  * @property {{profissional:string, crp:string, instituicao?:string, emitidoEm?:string}} [origem]
  *           Quem emitiu o documento, quando ele vem de fora do Serviço-Escola.
@@ -148,6 +148,25 @@
  * @property {number[]} estudantesIds
  * @property {string} registradoPor
  * @property {string} ts
+ */
+
+/**
+ * Pedido do paciente, recebido fora do sistema e registrado pelo técnico.
+ * @typedef {Object} AppointmentRequest
+ * @property {string} id
+ * @property {number} pacienteId
+ * @property {"agendar"|"remarcar"|"cancelar"} tipo
+ * @property {number|null} agendamentoId   Atendimento a remarcar ou cancelar.
+ * @property {string} preferencia          Dias e horários de preferência.
+ * @property {string} observacao
+ * @property {"pendente"|"atendida"|"recusada"} status
+ * @property {string} criadoEm
+ * @property {number} solicitadoPorId
+ * @property {"presencial"|"telefone"|"email"} canal  Como o pedido chegou (nunca pelo sistema).
+ * @property {string} [resposta]           Obrigatória na recusa.
+ * @property {number|null} [agendamentoResultanteId]
+ * @property {string} [respondidoEm]
+ * @property {number} [respondidoPorId]
  */
 
 export {};

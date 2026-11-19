@@ -8,7 +8,7 @@
 //     → Repository → [mockPatientRepository hoje | apiPatientRepository no futuro]
 //
 // Hoje este repositório lê e escreve no array em memória PACIENTES
-// (carregado de data/db.json e gravado de volta pelo core/store.js). Quando o backend Java existir,
+// (carregado de data/db.json e gravado de volta pelo core/store.js). Se o servidor passar a consultar o banco por partes,
 // a MESMA interface (getById, list, create, update) passará a fazer
 // fetch() para /api/v1/patients — nenhuma tela precisará mudar,
 // apenas o import de quem a chama.

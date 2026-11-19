@@ -47,6 +47,9 @@ export let REGISTRO_DOCUMENTAL = {};
 // Comunicações/compartilhamentos de informação (Res. CFP 001/2009 art. 2º V;
 // LGPD art. 18 VII; Código de Ética art. 10): data, destinatário, finalidade.
 export let COMPARTILHAMENTOS = {};
+// Pedidos de agendamento, remarcação ou cancelamento feitos pelo paciente
+// (ou registrados pelo técnico). Só o técnico agenda.
+export let SOLICITACOES_AGENDAMENTO = [];
 
 // Configuração e dados institucionais vindos do servidor (/api/auth/me).
 export let SESSAO = { config: {}, institucional: {} };
@@ -100,6 +103,7 @@ export function loadDataset(data) {
   FALTAS = data.FALTAS || [];
   REGISTRO_DOCUMENTAL = data.REGISTRO_DOCUMENTAL || {};
   COMPARTILHAMENTOS = data.COMPARTILHAMENTOS || {};
+  SOLICITACOES_AGENDAMENTO = data.SOLICITACOES_AGENDAMENTO || [];
 }
 
 /** Estado que o navegador envia ao servidor (usuários e auditoria ficam de fora). */
@@ -115,6 +119,7 @@ export function snapshotDataset() {
     FALTAS,
     REGISTRO_DOCUMENTAL,
     COMPARTILHAMENTOS,
+    SOLICITACOES_AGENDAMENTO,
   };
 }
 

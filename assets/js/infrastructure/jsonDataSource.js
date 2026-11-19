@@ -153,6 +153,15 @@ export function gravarAoOcultarAba() {
   });
 }
 
+function lerComoBase64(arquivo) {
+  return new Promise((ok, falha) => {
+    const leitor = new FileReader();
+    leitor.onload = () => ok(String(leitor.result).replace(/^data:[^,]*,/, ""));
+    leitor.onerror = () => falha(new Error("Não foi possível ler o arquivo selecionado."));
+    leitor.readAsDataURL(arquivo);
+  });
+}
+
 // ── Atalhos da API ───────────────────────────────────────────
 export const servidor = {
   login: (login, senha) => api("/api/auth/login", { metodo: "POST", corpo: { login, senha }, silencioso401: true }),
@@ -163,11 +172,64 @@ export const servidor = {
   trocarSenha: (senhaAtual, novaSenha) => api("/api/auth/senha", { metodo: "POST", corpo: { senhaAtual, novaSenha } }),
   institucional: () => api("/api/institucional"),
   criarUsuario: (dados) => api("/api/usuarios", { metodo: "POST", corpo: dados }),
+  editarUsuario: (id, dados) => api(`/api/usuarios/${id}`, { metodo: "PUT", corpo: dados }),
+  redefinirSenhaUsuario: (id, senhaProvisoria, senhaAdmin) =>
+    api(`/api/usuarios/${id}/senha`, { metodo: "POST", corpo: { senhaProvisoria, senhaAdmin } }),
+  gerarAcessoTemporario: (pacienteId, senhaAdmin) =>
+    api(`/api/pacientes/${pacienteId}/acesso-temporario`, { metodo: "POST", corpo: { senhaAdmin } }),
   desbloquearUsuario: (id) => api(`/api/usuarios/${id}/desbloquear`, { metodo: "POST" }),
   alterarAtivoUsuario: (id, ativo, senhaAdmin) => api(`/api/usuarios/${id}/ativo`, { metodo: "POST", corpo: { ativo, senhaAdmin } }),
   evento: (tipo, dados = {}) => api("/api/audit/evento", { metodo: "POST", corpo: { tipo, ...dados } }),
   auditoria: (filtros = {}) => api(`/api/audit?${new URLSearchParams(filtros)}`),
   urlCsvAuditoria: (filtros = {}) => `/api/audit/csv?${new URLSearchParams(filtros)}`,
+  /**
+   * Envia um arquivo ao prontuário. O servidor confere o tipo real e o
+   * tamanho, grava o conteúdo cifrado e devolve o escopo atualizado.
+   * @param {number} pid
+   * @param {{categoria:string, titulo?:string, origem?:object, resumo?:string}} documento
+   * @param {File} arquivo
+   */
+  async enviarDocumento(pid, documento, arquivo) {
+    if ((await detectarModo()) === "demo") {
+      const { enviarDocumentoDemo } = await import("./servidorDemo.js");
+      const bytes = new Uint8Array(await arquivo.arrayBuffer());
+      return enviarDocumentoDemo(pid, documento, { nome: arquivo.name, bytes });
+    }
+    const conteudoBase64 = await lerComoBase64(arquivo);
+    return api(`/api/pacientes/${pid}/documentos`, { metodo: "POST", corpo: { documento, arquivo: { nome: arquivo.name, conteudoBase64 } } });
+  },
+
+  /** Baixa o arquivo de um documento (a leitura fica na auditoria). */
+  async baixarArquivo(pid, docId) {
+    let blob;
+    let nome;
+    if ((await detectarModo()) === "demo") {
+      const { baixarArquivoDemo } = await import("./servidorDemo.js");
+      const r = await baixarArquivoDemo(pid, docId);
+      blob = new Blob([r.bytes], { type: r.mime });
+      nome = r.nome;
+    } else {
+      const r = await fetch(`/api/pacientes/${pid}/documentos/${encodeURIComponent(docId)}/arquivo`, { cache: "no-store", credentials: "same-origin" });
+      if (!r.ok) {
+        const dados = await r.json().catch(() => ({}));
+        if (r.status === 401) emitir("pep:unauthorized", { motivo: dados.motivo, mensagem: dados.erro });
+        throw new Error(dados.erro || `Servidor respondeu ${r.status}`);
+      }
+      blob = await r.blob();
+      const disp = r.headers.get("content-disposition") || "";
+      const utf8 = disp.match(/filename\*=UTF-8''([^;]+)/i);
+      nome = utf8 ? decodeURIComponent(utf8[1]) : disp.match(/filename="([^"]+)"/i)?.[1] || "documento";
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    return nome;
+  },
+
   /** Baixa a trilha em CSV (no modo demonstração o arquivo é gerado no navegador). */
   async baixarCsvAuditoria(filtros = {}) {
     const a = document.createElement("a");

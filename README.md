@@ -8,7 +8,7 @@
 [![Testes](https://img.shields.io/github/actions/workflow/status/RafaelNazareth/prontuario/testes.yml?branch=main&label=testes&style=for-the-badge)](https://github.com/RafaelNazareth/prontuario/actions/workflows/testes.yml)
 ![Projeto Real](https://img.shields.io/badge/projeto-institucional%20real-success?style=for-the-badge)
 ![JS](https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
-![Node.js](https://img.shields.io/badge/Node.js-servidor%20sem%20depend%C3%AAncias-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
 
 ### [🔗 **Acessar o projeto rodando**](https://rafaelnazareth.github.io/prontuario/)
 
@@ -49,7 +49,9 @@ Os dados manipulados são clínicos e sensíveis (contexto de **LGPD**), e os us
 
 No GitHub Pages não há servidor, então o sistema entra sozinho em **modo demonstração**. A parte do servidor roda dentro do navegador, com as mesmas regras da versão completa. Os dados são fictícios e as alterações ficam salvas só no navegador de quem está testando; o selo "Demonstração" no topo permite restaurar os dados de exemplo.
 
-**Versão completa (local):** com Node.js 18+, rode `npm run dev` e acesse `http://localhost:5500`. Nesse modo, login, permissões e auditoria rodam no servidor e os dados ficam em `data/db.json`.
+**Versão completa (local):** com Node.js 20+, rode `npm install` e `npm run dev` e acesse `http://localhost:5500`. Nesse modo, login, permissões e auditoria rodam no servidor. Os dados ficam em `data/db.json` e os arquivos anexados, cifrados, em `data/arquivos/`.
+
+**Com MongoDB:** `PEP_BANCO=mongodb PEP_MONGODB_URI="mongodb://..." npm run dev`. Para levar os dados do JSON para o MongoDB, use `npm run data:migrar-mongodb`. Variáveis, chaves, HTTPS e backups estão no [guia de implantação](docs/IMPLANTACAO.md).
 
 **Testes:** `npm test` roda a suíte automatizada (`node:test`) e `npm run lint` roda o ESLint. Os dois rodam também no GitHub Actions a cada envio.
 
@@ -57,7 +59,7 @@ No GitHub Pages não há servidor, então o sistema entra sozinho em **modo demo
 
 ## 🏗️ Como o projeto é estruturado hoje
 
-Sem bundler e sem framework de UI. O front-end roda como **ES Modules nativos do navegador**, e o servidor é Node.js puro, sem dependências.
+Sem bundler e sem framework de UI. O front-end roda como **ES Modules nativos do navegador**, e o servidor é Node.js puro. A única dependência de execução é o driver do MongoDB, opcional e carregado só quando o banco escolhido é o MongoDB.
 
 ```
 index.html
@@ -70,11 +72,13 @@ assets/
     ├── modals/              → formulários e ações de registro clínico
     ├── repositories/        → acesso aos dados por entidade
     ├── shared/              → regras usadas pelo servidor e pelo modo demonstração:
-    │                          permissões, auditoria, política de senha, configuração
+    │                          permissões, auditoria, usuários, arquivos, política de senha, configuração
     └── infrastructure/      → comunicação com a API e servidor simulado (demonstração)
-server/                      → servidor Node: autenticação, API, auditoria, backup cifrado
+server/                      → servidor Node: autenticação, API, auditoria, backup e arquivos cifrados
+server/banco/                → banco em arquivo JSON (padrão) ou MongoDB, com a mesma interface
 data/seed.json               → dados de demonstração (fictícios)
-scripts/                     → geração de agenda e restauração de backup
+data/instituicao.exemplo.json → modelo dos dados reais da instituição (preenchido na implantação)
+scripts/                     → geração de agenda, restauração de backup e migração para MongoDB
 tests/                       → testes automatizados (node:test)
 docs/                        → guia técnico, conformidade e documentação de arquitetura
 ```
@@ -100,6 +104,11 @@ O sistema foi revisado contra as normas do **Conselho Federal de Psicologia** e 
 - Bloqueio após 5 tentativas erradas e mensagem de erro genérica.
 - Sessão em cookie HttpOnly, encerrada após 15 minutos sem atividade, com aviso antes.
 
+**Arquivos anexados protegidos.**
+- Só PDF, PNG, JPEG e Word (.docx), até 10 MB. O tipo é conferido pelo conteúdo do arquivo, não pela extensão.
+- Gravados cifrados (AES-256-GCM). O SHA-256 fica no prontuário e é conferido a cada download, que entra na auditoria.
+- Quem baixa é quem pode ver o registro: o paciente baixa os próprios documentos, mas não o material de testes.
+
 **Prontuário conforme o CFP.**
 - Seções obrigatórias: identificação, avaliação de demanda, objetivos, evoluções, encerramento e cópias dos documentos emitidos.
 - Supervisões e material de testes ficam num registro documental separado, que o paciente não acessa.
@@ -113,15 +122,15 @@ O sistema foi revisado contra as normas do **Conselho Federal de Psicologia** e 
 - Cada registro está encadeado ao anterior por hash, então qualquer adulteração é detectada.
 
 **Direitos do paciente.**
-- Portal com acesso integral ao próprio prontuário.
-- Solicitações pela LGPD com prazo de 15 dias.
+- Acesso integral ao próprio prontuário: impresso pelo técnico ou consultado pelo paciente com um acesso temporário (login e senha gerados pelo sistema, com prazo de validade). O acesso do paciente é só de consulta.
+- Solicitações pela LGPD com prazo de 15 dias, feitas presencialmente, por telefone ou e-mail e registradas pelo técnico.
 - Consentimentos versionados e revogáveis, com autorização do responsável para menores.
 
 ---
 
 ## ✨ Funcionalidades implementadas
 
-- **Login:** quatro papéis, aceite de aviso de privacidade e termo de sigilo, troca de senha e bloqueio por tentativas.
+- **Login:** quatro papéis, aceite de aviso de privacidade e termo de sigilo, troca obrigatória da senha provisória no primeiro acesso da equipe e bloqueio por tentativas.
 - **Dashboard:** indicadores, gráfico de atendimentos, agenda do dia e pendências, incluindo validações do supervisor.
 - **Prontuário completo:**
   - avaliação de demanda e objetivos;
@@ -133,31 +142,38 @@ O sistema foi revisado contra as normas do **Conselho Federal de Psicologia** e 
 - **Documentos psicológicos conforme a Res. CFP 06/2019:**
   - declaração, atestado, relatório, laudo e parecer;
   - impressão com páginas numeradas, protocolo de entrega e devolutiva.
-- **Agenda semanal** com registro de faltas e troca de paciente (dados de exemplo até dezembro de 2026).
+- **Agenda semanal:** só o técnico responsável agenda, remarca e cancela, com conferência de conflito de horário do paciente e do estagiário. A equipe do caso registra faltas; técnico ou supervisor justificam. Troca de paciente após faltas (dados de exemplo até dezembro de 2026).
+- **Pedidos de agendamento:** o paciente pede agendamento, remarcação ou cancelamento presencialmente, por telefone ou e-mail; o técnico registra o pedido na Agenda ("Registrar pedido", com o canal) e atende ou recusa explicando o motivo.
+- **Acesso temporário do paciente:** quando o paciente pede o prontuário, o técnico imprime ou gera um acesso temporário (login `pac<caso>` e senha aleatória mostrada uma única vez, com opção de imprimir). Vencido o prazo, o login é recusado. O paciente só consulta: prontuário, próximos atendimentos, download dos próprios documentos e impressão.
+- **Upload e download reais de documentos**, com arquivos cifrados e verificação de integridade.
 - **Notificações** de evolução pendente, faltas e trocas, e **busca global** de pacientes.
 - **Encerramento de atendimento** com motivo e encaminhamento.
-- **Gestão de usuários:** inativação em vez de exclusão, CRP e matrícula.
+- **Gestão de usuários:** cadastro, edição de nome, login, papel, CRP e matrícula, senha inicial ou provisória definida pelo técnico com troca obrigatória no primeiro acesso, inativação em vez de exclusão e acesso temporário dos pacientes ao prontuário. Tudo com confirmação da senha do técnico e registro na auditoria.
+- **Paginação** nas listas de pacientes, equipe, acesso temporário dos pacientes e trilha de auditoria.
 - **Auditoria:** filtros, exportação CSV e verificação de integridade.
-- **Backup cifrado (AES-256-GCM)** com restauração verificada (versão com servidor).
+- **Backup cifrado (AES-256-GCM)** com restauração verificada (versão com servidor). No banco JSON, os arquivos anexados também são copiados; no MongoDB, entram no `mongodump`.
+- **Banco JSON ou MongoDB**, escolhido por variável de ambiente, com script de migração.
 - **Interface responsiva.**
 
 ---
 
 ## 🚧 O que ainda não existe
 
-- **Publicação para uso real:** precisa de hospedagem com Node.js, HTTPS e disco cifrado. O GitHub Pages serve apenas a demonstração.
+- **Publicação para uso real:** precisa de hospedagem com Node.js, HTTPS e disco cifrado. O GitHub Pages serve apenas a demonstração. O que a implantação precisa está em [docs/IMPLANTACAO.md](docs/IMPLANTACAO.md).
 - **Assinatura com certificado digital ICP-Brasil:** hoje a assinatura é eletrônica, por login individual mais o hash do conteúdo.
 - **Verificação em duas etapas (MFA).**
-- **Banco de dados:** os dados ficam em um arquivo JSON gravado pelo servidor; está planejada a migração para banco de dados.
+- **Banco de dados em produção:** o adaptador MongoDB existe e é testado, mas nenhum ambiente real foi migrado. O servidor ainda carrega o conjunto inteiro de dados a cada requisição; ler só o necessário por consulta é um passo futuro.
+- **Testes de ponta a ponta no navegador (E2E).**
 
 ---
 
 ## 🗺️ Próximos passos
 
 - [ ] Publicar a versão completa em hospedagem com Node.js e HTTPS
-- [ ] Cumprir o checklist institucional de [docs/CONFORMIDADE.md](docs/CONFORMIDADE.md): encarregado de dados, plano de incidentes e troca das senhas de demonstração
-- [ ] Migrar a persistência para banco de dados
+- [ ] Cumprir o checklist institucional de [docs/CONFORMIDADE.md](docs/CONFORMIDADE.md): dados do encarregado e prazo do acesso temporário do paciente em `data/instituicao.json`, plano de incidentes e troca das senhas de demonstração
+- [ ] Migrar a produção para o MongoDB e passar a ler os dados por consulta
 - [ ] Avaliar assinatura com certificado ICP-Brasil e MFA
+- [ ] Testes E2E dos fluxos de cada papel
 - [ ] Implantação para uso real pelo Serviço-Escola de Psicologia da FCMSCSP
 
 ---
